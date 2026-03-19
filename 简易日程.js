@@ -1,578 +1,352 @@
 // ==UserScript==
-// @name         深色月视图日程管理器(仿截图版)
+// @name         月视图日程管理器（智谱AI自动化版）
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  仿滴答清单风格的深色月视图日程管理器，支持AI自动化
+// @version      1.0
+// @description  月视图日程 + 智谱AI自动修改日程，参考智谱AI悬浮助手开发
 // @author       豆包
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @require      https://cdn.tailwindcss.com
 // @run-at       document-end
 // @license      MIT
 // ==/UserScript==
 
-// ===================== 【AI配置区 - 请自行修改】 =====================
-const AI_CONFIG = {
-  API_URL: "https://api.openai.com/v1/chat/completions", // AI接口地址(兼容OpenAI格式)
-  API_KEY: "你的AI密钥", // 填写你的AI API Key
-  MODEL: "gpt-3.5-turbo", // AI模型名称
-};
-// =====================================================================
+(function() {
+    'use strict';
 
-(function () {
-  "use strict";
+    // ===================== 【照搬你的智谱AI核心配置】 =====================
+    const API = {
+        SYNC: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        ASYNC: "https://open.bigmodel.cn/api/paas/v4/async/chat/completions",
+        RESULT: "https://open.bigmodel.cn/api/paas/v4/async-result/"
+    };
+    const MODEL_LIST = [
+        { label: "GLM-4.7-Flash（文本）", value: "glm-4.7-flash" },
+        { label: "GLM-4V-Flash（免费视觉）", value: "glm-4v-flash" },
+        { label: "GLM-4.6V-Flash（视觉图像）", value: "glm-4.6v-flash" },
+        { label: "GLM-4.1V-Thinking-Flash（视觉图像）", value: "glm-4.1v-thinking-flash" },
+        { label: "GLM-4-Flash", value: "glm-4-flash-250414" },
+    ];
+    const STORAGE = {
+        API_KEY: "ZHIPU_API_KEY", MODEL: "ZHIPU_MODEL", TEMP: "ZHIPU_TEMP",
+        WIDGET_STATE: "WIDGET_STATE", WIDGET_POS: "WIDGET_POS",
+    };
+    // =====================================================================
 
-  // 注入自定义样式（完全对齐截图风格）
-  GM_addStyle(`
-    /* 全局容器 */
-    #calendar-container {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: #1e1e2e;
-      z-index: 999998;
-      color: #e0e0e0;
-      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-      display: flex;
-      flex-direction: column;
-    }
-    /* 顶部栏 */
-    #calendar-header {
-      display: flex;
-      align-items: center;
-      padding: 12px 20px;
-      border-bottom: 1px solid #2d2d3f;
-      gap: 16px;
-    }
-    .header-icon {
-      font-size: 20px;
-      cursor: pointer;
-      color: #888;
-    }
-    .header-icon:hover {
-      color: #e0e0e0;
-    }
-    #month-title {
-      font-size: 18px;
-      font-weight: 500;
-    }
-    .header-actions {
-      margin-left: auto;
-      display: flex;
-      gap: 12px;
-      align-items: center;
-    }
-    .header-btn {
-      background: #2d2d3f;
-      border: none;
-      color: #e0e0e0;
-      padding: 6px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    .header-btn:hover {
-      background: #3d3d5f;
-    }
-    .view-toggle {
-      display: flex;
-      gap: 4px;
-      background: #2d2d3f;
-      padding: 4px;
-      border-radius: 6px;
-    }
-    .view-btn {
-      background: transparent;
-      border: none;
-      color: #888;
-      padding: 4px 8px;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .view-btn.active {
-      background: #409eff;
-      color: #fff;
-    }
-    .month-nav {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .month-arrow {
-      background: transparent;
-      border: none;
-      color: #888;
-      font-size: 16px;
-      cursor: pointer;
-    }
-    .month-arrow:hover {
-      color: #e0e0e0;
-    }
-    /* 主内容区：侧边栏+月历 */
-    #calendar-main {
-      flex: 1;
-      display: flex;
-      overflow: hidden;
-    }
-    /* 侧边栏 */
-    #sidebar {
-      width: 48px;
-      background: #161622;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 12px 0;
-      gap: 24px;
-      border-right: 1px solid #2d2d3f;
-    }
-    .sidebar-icon {
-      font-size: 20px;
-      color: #888;
-      cursor: pointer;
-    }
-    .sidebar-icon.active, .sidebar-icon:hover {
-      color: #409eff;
-    }
-    /* 月历区域 */
-    #calendar-content {
-      flex: 1;
-      padding: 16px;
-      overflow-y: auto;
-    }
-    /* 月历表头（星期） */
-    #calendar-weekdays {
-      display: grid;
-      grid-template-columns: repeat(7, 1fr);
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-    .weekday {
-      text-align: center;
-      font-size: 14px;
-      color: #888;
-      padding: 8px 0;
-    }
-    /* 月历网格 */
-    #calendar-grid {
-      display: grid;
-      grid-template-columns: repeat(7, 1fr);
-      grid-template-rows: repeat(6, 120px);
-      gap: 8px;
-    }
-    .calendar-day {
-      background: #252535;
-      border-radius: 8px;
-      padding: 8px;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-    }
-    .day-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-    .day-number {
-      font-size: 14px;
-      font-weight: 500;
-    }
-    .day-number.today {
-      background: #409eff;
-      color: #fff;
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .day-festival {
-      font-size: 12px;
-      color: #2ea043;
-    }
-    .day-schedules {
-      flex: 1;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .schedule-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 6px;
-      border-radius: 4px;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .schedule-item:hover {
-      opacity: 0.8;
-    }
-    .schedule-checkbox {
-      width: 12px;
-      height: 12px;
-      accent-color: #2ea043;
-    }
-    .schedule-time {
-      color: #aaa;
-      font-size: 11px;
-    }
-    .schedule-content {
-      flex: 1;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .schedule-item.completed .schedule-content {
-      text-decoration: line-through;
-      color: #666;
-    }
-    /* 底部栏 */
-    #calendar-footer {
-      padding: 12px 20px;
-      border-top: 1px solid #2d2d3f;
-      display: flex;
-      justify-content: center;
-      gap: 16px;
-    }
-    .footer-view-btn {
-      background: transparent;
-      border: none;
-      color: #888;
-      padding: 6px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    .footer-view-btn.active {
-      color: #409eff;
-      font-weight: 500;
-    }
-    .upgrade-btn {
-      position: absolute;
-      bottom: 60px;
-      right: 20px;
-      background: #ff9f43;
-      color: #fff;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 20px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-    /* 滚动条美化 */
-    ::-webkit-scrollbar {
-      width: 6px;
-    }
-    ::-webkit-scrollbar-track {
-      background: #2d2d3f;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: #444;
-      border-radius: 3px;
-    }
-  `);
+    // ===================== 日程AI固定配置（自动修改日程核心） =====================
+    const SCHEDULE_AI_PROMPT = `你是专业的日程管理助手，只返回标准JSON格式，禁止任何解释、文字、markdown。
+    支持的指令类型：
+    1. add：添加日程 → {"type":"add","data":{"content":"日程内容","time":"14:00"}}
+    2. delete：删除日程 → {"type":"delete","keyword":"关键词"} 或 {"type":"delete","id":"日程ID"}
+    3. complete：标记完成 → {"type":"complete","id":"日程ID"} 或 {"type":"complete"}(全部完成)
+    4. clear：清空所有 → {"type":"clear"}
+    严格按照格式返回纯JSON！`;
+    // =====================================================================
 
-  // 核心数据类
-  class CalendarManager {
-    constructor() {
-      this.schedules = this.getLocalSchedules();
-      this.currentDate = new Date();
-      this.currentView = "month"; // 默认月视图
-      this.initUI();
-      this.bindEvent();
-      this.renderCalendar();
-    }
+    // 全局状态
+    let isRequesting = false;
+    let schedules = [];
+    let currentDate = new Date();
 
-    // 读取本地存储
-    getLocalSchedules() {
-      return GM_getValue("schedules", []);
-    }
-    // 保存本地存储
-    saveLocalSchedules() {
-      GM_setValue("schedules", this.schedules);
-    }
-    // 生成ID
-    generateId() {
-      return Date.now() + Math.random().toString(36).substr(2, 5);
-    }
+    // ===================== 样式（月视图深色主题） =====================
+    GM_addStyle(`
+        #calendar-container { backdrop-filter: blur(8px); }
+        .calendar-day { transition: all 0.2s; }
+        .calendar-day:hover { background: #2d2d3f; }
+        .loading-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #2d2d3f; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+    `);
 
-    // 初始化UI
-    initUI() {
-      const html = `
-        <div id="calendar-container">
-          <!-- 顶部栏 -->
-          <div id="calendar-header">
-            <span class="header-icon">📅</span>
-            <span id="month-title">${this.getMonthTitle()}</span>
-            <div class="header-actions">
-              <button class="header-btn" id="add-btn">+ 添加</button>
-              <div class="view-toggle">
-                <button class="view-btn" id="view-month">月</button>
-                <button class="view-btn" id="view-week">周</button>
-                <button class="view-btn" id="view-day">日</button>
-              </div>
-              <div class="month-nav">
-                <button class="month-arrow" id="prev-month">‹</button>
-                <button class="month-arrow" id="next-month">›</button>
-              </div>
-              <span class="header-icon">⋮</span>
+    // ===================== 1. 初始化UI（月视图+AI输入框） =====================
+    function createUI() {
+        const html = `
+        <div id="calendar-container" class="fixed top-6 right-6 w-[450px] h-[700px] rounded-2xl flex flex-col z-[9999] border border-gray-700 overflow-hidden bg-[#1e1e2e] text-gray-200 shadow-xl">
+            <!-- 拖拽栏 -->
+            <div id="drag-handle" class="px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white flex justify-between items-center cursor-move shrink-0">
+                <span class="text-sm font-semibold">📅 月视图日程管理器</span>
+                <div class="flex gap-2">
+                    <button id="minimize-btn" class="hover:bg-white/20 p-1 rounded text-xs">−</button>
+                    <button id="close-btn" class="hover:bg-white/20 p-1 rounded text-xs">×</button>
+                </div>
             </div>
-          </div>
-          <!-- 主内容区 -->
-          <div id="calendar-main">
-            <!-- 侧边栏 -->
-            <div id="sidebar">
-              <span class="sidebar-icon">☑️</span>
-              <span class="sidebar-icon active">🗓</span>
-              <span class="sidebar-icon">📊</span>
-              <span class="sidebar-icon">🔍</span>
-              <span class="sidebar-icon">⚙️</span>
+
+            <!-- 智谱AI配置区 -->
+            <div class="p-3 border-b border-gray-700 bg-[#161622] shrink-0">
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                    <input id="zhipu-api-key" placeholder="输入智谱API Key" class="w-full px-3 py-2 text-xs border border-gray-600 rounded-lg bg-[#252535] text-white">
+                    <select id="zhipu-model" class="px-3 py-2 text-xs border border-gray-600 rounded-lg bg-[#252535] text-white">
+                        ${MODEL_LIST.map(m => `<option value="${m.value}">${m.label}</option>`).join('')}
+                    </select>
+                </div>
+                <!-- AI指令输入 -->
+                <div class="flex gap-2">
+                    <input id="ai-input" placeholder="输入AI指令：添加下午3点开会 / 删除所有会议..." class="flex-1 px-3 py-2 text-xs border border-gray-600 rounded-lg bg-[#252535] text-white">
+                    <button id="ai-send-btn" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs">执行AI</button>
+                </div>
             </div>
-            <!-- 月历内容 -->
-            <div id="calendar-content">
-              <div id="calendar-weekdays">
-                <div class="weekday">周日</div>
-                <div class="weekday">周一</div>
-                <div class="weekday">周二</div>
-                <div class="weekday">周三</div>
-                <div class="weekday">周四</div>
-                <div class="weekday">周五</div>
-                <div class="weekday">周六</div>
-              </div>
-              <div id="calendar-grid"></div>
+
+            <!-- 月历头部 -->
+            <div class="p-3 flex justify-between items-center border-b border-gray-700 shrink-0">
+                <button id="prev-month" class="px-2 py-1 bg-[#252535] rounded text-xs">←</button>
+                <span id="month-title" class="text-sm font-medium"></span>
+                <button id="next-month" class="px-2 py-1 bg-[#252535] rounded text-xs">→</button>
             </div>
-          </div>
-          <!-- 底部栏 -->
-          <div id="calendar-footer">
-            <button class="footer-view-btn" id="view-year">年视图</button>
-            <button class="footer-view-btn active" id="view-month-footer">月视图</button>
-            <button class="footer-view-btn" id="view-week-footer">周视图</button>
-            <button class="footer-view-btn" id="view-day-footer">日视图</button>
-            <button class="footer-view-btn" id="view-schedule">日程视图</button>
-            <button class="footer-view-btn" id="view-multi">多日视图</button>
-            <button class="footer-view-btn" id="view-multi-week">多周视图</button>
-          </div>
-          <button class="upgrade-btn">立即升级</button>
+
+            <!-- 星期栏 -->
+            <div class="grid grid-cols-7 gap-1 px-2 py-2 text-xs text-gray-400 text-center shrink-0">
+                <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>
+            </div>
+
+            <!-- 月历网格 -->
+            <div id="calendar-grid" class="grid grid-cols-7 gap-1 p-2 flex-1 overflow-y-auto"></div>
+
+            <!-- 底部操作 -->
+            <div class="p-3 border-t border-gray-700 flex justify-between shrink-0">
+                <button id="add-schedule-btn" class="px-3 py-1 bg-green-600 hover:bg-green-700 rounded text-xs">+ 添加日程</button>
+                <button id="clear-all-btn" class="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-xs">清空所有</button>
+            </div>
         </div>
-      `;
-      document.body.insertAdjacentHTML("beforeend", html);
-      this.dom = {
-        container: document.getElementById("calendar-container"),
-        monthTitle: document.getElementById("month-title"),
-        prevMonth: document.getElementById("prev-month"),
-        nextMonth: document.getElementById("next-month"),
-        addBtn: document.getElementById("add-btn"),
-        calendarGrid: document.getElementById("calendar-grid"),
-      };
+        `;
+        document.body.insertAdjacentHTML('beforeend', html);
     }
 
-    // 绑定事件
-    bindEvent() {
-      // 月份切换
-      this.dom.prevMonth.onclick = () => {
-        this.currentDate.setMonth(this.currentDate.getMonth() - 1);
-        this.renderCalendar();
-      };
-      this.dom.nextMonth.onclick = () => {
-        this.currentDate.setMonth(this.currentDate.getMonth() + 1);
-        this.renderCalendar();
-      };
-      // 添加日程
-      this.dom.addBtn.onclick = () => {
-        const content = prompt("请输入日程内容：");
-        if (content) {
-          const time = prompt("请输入时间（如 14:00）：") || "";
-          this.addSchedule(content, time);
+    // ===================== 2. 拖拽/最小化/存储（照搬你的逻辑） =====================
+    function initDrag() {
+        const dragHandle = document.getElementById('drag-handle');
+        const widget = document.getElementById('calendar-container');
+        let isDragging = false, startX, startY, startLeft, startTop;
+
+        const savedPos = GM_getValue(STORAGE.WIDGET_POS, null);
+        if (savedPos) {
+            widget.style.left = savedPos.left + 'px';
+            widget.style.top = savedPos.top + 'px';
+            widget.style.bottom = 'auto';
+            widget.style.right = 'auto';
         }
-      };
-      // 视图切换（简化实现，仅月视图可用）
-      document.querySelectorAll(".view-btn, .footer-view-btn").forEach(btn => {
-        btn.onclick = () => {
-          document.querySelectorAll(".view-btn, .footer-view-btn").forEach(b => b.classList.remove("active"));
-          btn.classList.add("active");
-        };
-      });
+
+        dragHandle.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            const rect = widget.getBoundingClientRect();
+            startX = e.clientX; startY = e.clientY;
+            startLeft = rect.left; startTop = rect.top;
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            widget.style.left = startLeft + dx + 'px';
+            widget.style.top = startTop + dy + 'px';
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                GM_setValue(STORAGE.WIDGET_POS, {
+                    left: widget.offsetLeft,
+                    top: widget.offsetTop
+                });
+            }
+        });
     }
 
-    // 获取月份标题
-    getMonthTitle() {
-      return `${this.currentDate.getFullYear()}年${this.currentDate.getMonth() + 1}月`;
+    function initMinimize() {
+        const btn = document.getElementById('minimize-btn');
+        const widget = document.getElementById('calendar-container');
+        btn.addEventListener('click', () => {
+            widget.classList.toggle('h-[700px]');
+            widget.classList.toggle('h-12');
+        });
+    }
+
+    function initStorage() {
+        const apiKey = document.getElementById('zhipu-api-key');
+        const model = document.getElementById('zhipu-model');
+        apiKey.value = GM_getValue(STORAGE.API_KEY, '');
+        model.value = GM_getValue(STORAGE.MODEL, MODEL_LIST[0].value);
+
+        apiKey.addEventListener('input', () => GM_setValue(STORAGE.API_KEY, apiKey.value.trim()));
+        model.addEventListener('change', () => GM_setValue(STORAGE.MODEL, model.value));
+    }
+
+    // ===================== 3. 日程核心功能（增删改查+本地存储） =====================
+    function getSchedules() {
+        return GM_getValue('schedules', []);
+    }
+    function saveSchedules(data) {
+        GM_setValue('schedules', data);
+        schedules = data;
+        renderCalendar();
+    }
+    function generateId() {
+        return Date.now() + Math.random().toString(36).slice(2, 8);
     }
 
     // 渲染月历
-    renderCalendar() {
-      this.dom.monthTitle.textContent = this.getMonthTitle();
-      const year = this.currentDate.getFullYear();
-      const month = this.currentDate.getMonth();
-      const firstDay = new Date(year, month, 1);
-      const lastDay = new Date(year, month + 1, 0);
-      const today = new Date();
+    function renderCalendar() {
+        const grid = document.getElementById('calendar-grid');
+        const title = document.getElementById('month-title');
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth();
+        const firstDay = new Date(year, month, 1).getDay();
+        const lastDate = new Date(year, month + 1, 0).getDate();
+        const today = new Date();
 
-      // 计算月历网格需要填充的日期
-      const days = [];
-      // 填充上月剩余日期
-      const firstDayOfWeek = firstDay.getDay(); // 0=周日, 6=周六
-      for (let i = 0; i < firstDayOfWeek; i++) {
-        days.push(new Date(year, month, -firstDayOfWeek + i + 1));
-      }
-      // 填充当月日期
-      for (let i = 1; i <= lastDay.getDate(); i++) {
-        days.push(new Date(year, month, i));
-      }
-      // 填充下月剩余日期，补满6行（42天）
-      while (days.length < 42) {
-        days.push(new Date(year, month + 1, days.length - firstDayOfWeek + 1));
-      }
+        title.textContent = `${year}年${month+1}月`;
+        grid.innerHTML = '';
+        schedules = getSchedules();
 
-      // 渲染日期格子
-      let html = "";
-      days.forEach(day => {
-        const dateStr = day.toISOString().split("T")[0];
-        const isCurrentMonth = day.getMonth() === month;
-        const isToday = day.toDateString() === today.toDateString();
-        const daySchedules = this.schedules.filter(s => s.date === dateStr);
-        const festival = this.getFestival(day); // 简单节日模拟
+        // 填充日期
+        for (let i = 0; i < firstDay; i++) addDayCell('', false);
+        for (let d = 1; d <= lastDate; d++) addDayCell(d, true);
 
-        html += `
-          <div class="calendar-day ${isCurrentMonth ? "" : "other-month"}">
-            <div class="day-header">
-              <span class="day-number ${isToday ? "today" : ""}">${day.getDate()}</span>
-              ${festival ? `<span class="day-festival">${festival}</span>` : ""}
-            </div>
-            <div class="day-schedules">
-              ${daySchedules.map(s => `
-                <div class="schedule-item ${s.completed ? "completed" : ""}" data-id="${s.id}" style="background: ${s.color}">
-                  <input type="checkbox" class="schedule-checkbox" ${s.completed ? "checked" : ""}>
-                  <span class="schedule-time">${s.time}</span>
-                  <span class="schedule-content">${s.content}</span>
+        function addDayCell(day, isCurrent) {
+            const dateStr = day ? `${year}-${String(month+1).padStart(2,0)}-${String(day).padStart(2,0)}` : '';
+            const daySchedules = schedules.filter(s => s.date === dateStr);
+            const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+
+            const cell = document.createElement('div');
+            cell.className = `calendar-day p-1 rounded bg-[#252535] min-h-[80px] relative ${isToday ? 'ring-1 ring-blue-500' : ''}`;
+            cell.innerHTML = `
+                <div class="text-xs font-medium ${isToday ? 'text-blue-400' : 'text-gray-300'}">${day || ''}</div>
+                <div class="mt-1 space-y-1 max-h-[60px] overflow-y-auto">
+                    ${daySchedules.map(s => `
+                        <div class="text-[10px] px-1 py-0.5 rounded ${s.completed ? 'bg-gray-600 line-through' : 'bg-blue-500/30'}" data-id="${s.id}">
+                            ${s.time} ${s.content}
+                        </div>
+                    `).join('')}
                 </div>
-              `).join("")}
-            </div>
-          </div>
-        `;
-      });
-      this.dom.calendarGrid.innerHTML = html;
-
-      // 绑定日程事件
-      document.querySelectorAll(".schedule-item").forEach(item => {
-        const checkbox = item.querySelector(".schedule-checkbox");
-        const id = item.dataset.id;
-        checkbox.onchange = () => this.toggleComplete(id);
-      });
+            `;
+            grid.appendChild(cell);
+        }
     }
 
-    // 模拟节日（可扩展）
-    getFestival(day) {
-      const festivals = {
-        "8-15": "中元节",
-        "9-2": "白露",
-        "9-10": "教师节",
-        "9-22": "秋分",
-        "9-29": "中秋节",
-      };
-      const key = `${day.getMonth() + 1}-${day.getDate()}`;
-      return festivals[key] || "";
+    // 绑定日程操作
+    function bindScheduleEvents() {
+        // 月份切换
+        document.getElementById('prev-month').onclick = () => { currentDate.setMonth(currentDate.getMonth()-1); renderCalendar(); }
+        document.getElementById('next-month').onclick = () => { currentDate.setMonth(currentDate.getMonth()+1); renderCalendar(); }
+        // 添加日程
+        document.getElementById('add-schedule-btn').onclick = () => {
+            const content = prompt('日程内容：');
+            if (!content) return;
+            const time = prompt('时间（如14:00）：', '');
+            const newSchedule = {
+                id: generateId(),
+                content, time,
+                date: new Date().toISOString().split('T')[0],
+                completed: false
+            };
+            saveSchedules([...getSchedules(), newSchedule]);
+        };
+        // 清空所有
+        document.getElementById('clear-all-btn').onclick = () => {
+            if (confirm('确定清空所有日程？')) saveSchedules([]);
+        };
     }
 
-    // 基础日程操作
-    addSchedule(content, time = "") {
-      if (!content) return;
-      const colors = ["#409eff", "#67c23a", "#e6a23c", "#f56c6c", "#909399", "#8e44ad"];
-      const schedule = {
-        id: this.generateId(),
-        content: content,
-        time: time,
-        date: new Date().toISOString().split("T")[0], // 默认今天
-        color: colors[Math.floor(Math.random() * colors.length)],
-        completed: false,
-      };
-      this.schedules.push(schedule);
-      this.saveLocalSchedules();
-      this.renderCalendar();
+    // ===================== 4. 智谱AI请求 + 自动执行日程指令 =====================
+    function cleanJson(str) {
+        return str.replace(/```json|```/g, '').trim();
     }
 
-    toggleComplete(id) {
-      const schedule = this.schedules.find(s => s.id === id);
-      schedule.completed = !schedule.completed;
-      this.saveLocalSchedules();
-      this.renderCalendar();
+    // 发送AI请求（完全适配你的智谱接口）
+    async function sendAIScheduleCommand() {
+        const apiKey = document.getElementById('zhipu-api-key').value.trim();
+        const userPrompt = document.getElementById('ai-input').value.trim();
+        const btn = document.getElementById('ai-send-btn');
+
+        if (!apiKey) return alert('请输入智谱API Key');
+        if (!userPrompt) return alert('请输入AI指令');
+        if (isRequesting) return;
+
+        isRequesting = true;
+        btn.innerHTML = '<span class="loading-spin">⏳</span>';
+        btn.disabled = true;
+
+        try {
+            const res = await fetch(API.SYNC, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: document.getElementById('zhipu-model').value,
+                    temperature: 0.1,
+                    messages: [
+                        { role: 'system', content: SCHEDULE_AI_PROMPT },
+                        { role: 'user', content: userPrompt }
+                    ],
+                    response_format: { type: "json_object" }
+                })
+            });
+
+            const data = await res.json();
+            const result = cleanJson(data.choices[0].message.content);
+            const command = JSON.parse(result);
+
+            // 🔥 核心：执行AI返回的指令，自动修改日程
+            executeScheduleCommand(command);
+            alert('AI执行成功！');
+            document.getElementById('ai-input').value = '';
+        } catch (e) {
+            alert('AI执行失败：' + e.message);
+            console.error(e);
+        } finally {
+            isRequesting = false;
+            btn.innerHTML = '执行AI';
+            btn.disabled = false;
+        }
     }
 
-    // AI处理核心（保留原功能）
-    async aiHandle(prompt) {
-      if (!prompt || !AI_CONFIG.API_KEY || AI_CONFIG.API_KEY === "你的AI密钥") {
-        alert("请输入指令或配置AI密钥！");
-        return;
-      }
-      const systemPrompt = `你是日程助手，仅返回标准化JSON指令，无任何其他内容！支持类型：
-      1.add:添加 → {"type":"add","data":{"content":"日程内容","time":"14:00"}}
-      2.delete:删除 → {"type":"delete","keyword":"关键词"} / {"type":"delete","id":"id"}
-      3.complete:标记完成 → {"type":"complete","id":"id"} / {"type":"complete"}(全部)
-      4.clear:清空 → {"type":"clear"}
-      严格按格式返回JSON！`;
-      try {
-        const res = await fetch(AI_CONFIG.API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${AI_CONFIG.API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: AI_CONFIG.MODEL,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: prompt },
-            ],
-            temperature: 0.1,
-          }),
-        });
-        const data = await res.json();
-        const aiResult = data.choices[0].message.content.trim();
-        this.executeAiCommand(JSON.parse(aiResult));
-      } catch (err) {
-        console.error(err);
-        alert("AI请求失败：" + err.message);
-      }
+    // 执行日程指令（自动增删改查）
+    function executeScheduleCommand(cmd) {
+        let list = getSchedules();
+        switch (cmd.type) {
+            case 'add':
+                list.push({
+                    id: generateId(),
+                    content: cmd.data.content,
+                    time: cmd.data.time || '',
+                    date: new Date().toISOString().split('T')[0],
+                    completed: false
+                });
+                break;
+            case 'delete':
+                if (cmd.id) list = list.filter( => .id !== cmd.id);
+                if (cmd.keyword) list = list.filter( => !.content.includes(cmd.keyword));
+                break;
+            case 'complete':
+                if (cmd.id) list.find( => .id === cmd.id).completed = true;
+                else list.forEach( => .completed = true);
+                break;
+            case 'clear':
+                list = [];
+                break;
+        }
+        saveSchedules(list);
     }
 
-    executeAiCommand(cmd) {
-      switch (cmd.type) {
-        case "add":
-          this.addSchedule(cmd.data.content, cmd.data.time || "");
-          break;
-        case "delete":
-          if (cmd.id) {
-            this.schedules = this.schedules.filter( => .id !== cmd.id);
-          } else if (cmd.keyword) {
-            this.schedules = this.schedules.filter( => !.content.includes(cmd.keyword));
-          }
-          this.saveLocalSchedules();
-          this.renderCalendar();
-          break;
-        case "complete":
-          if (cmd.id) {
-            this.schedules.find( => .id === cmd.id).completed = true;
-          } else {
-            this.schedules.forEach( => .completed = true);
-          }
-          this.saveLocalSchedules();
-          this.renderCalendar();
-          break;
-        case "clear":
-          this.schedules = [];
-          this.saveLocalSchedules();
-          this.renderCalendar();
-          break;
-      }
-    }
-  }
+    // ===================== 5. 初始化所有功能 =====================
+    function init() {
+        createUI();
+        initDrag();
+        initMinimize();
+        initStorage();
+        renderCalendar();
+        bindScheduleEvents();
 
-  // 启动脚本
-  new CalendarManager();
+        // 绑定AI发送
+        document.getElementById('ai-send-btn').onclick = sendAIScheduleCommand;
+        document.getElementById('close-btn').onclick = () => document.getElementById('calendar-container').remove();
+    }
+
+    window.addEventListener('load', init);
 })();
