@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         深色日程规划器(仿截图版)
+// @name         深色月视图日程管理器(仿截图版)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  仿截图风格的深色日程规划器，支持AI自动化
+// @version      3.0
+// @description  仿滴答清单风格的深色月视图日程管理器，支持AI自动化
 // @author       豆包
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -25,205 +25,268 @@ const AI_CONFIG = {
 
   // 注入自定义样式（完全对齐截图风格）
   GM_addStyle(`
-    #schedule-container {
+    /* 全局容器 */
+    #calendar-container {
       position: fixed;
-      top: 50px;
-      right: 20px;
-      width: 380px;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
       background: #1e1e2e;
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-      z-index: 999999;
+      z-index: 999998;
+      color: #e0e0e0;
       font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-      user-select: none;
-      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    /* 顶部栏 */
+    #calendar-header {
+      display: flex;
+      align-items: center;
+      padding: 12px 20px;
+      border-bottom: 1px solid #2d2d3f;
+      gap: 16px;
+    }
+    .header-icon {
+      font-size: 20px;
+      cursor: pointer;
+      color: #888;
+    }
+    .header-icon:hover {
       color: #e0e0e0;
     }
-    #schedule-header {
-      padding: 12px 16px;
+    #month-title {
+      font-size: 18px;
+      font-weight: 500;
+    }
+    .header-actions {
+      margin-left: auto;
       display: flex;
       gap: 12px;
       align-items: center;
-      border-bottom: 1px solid #2d2d3f;
     }
     .header-btn {
-      flex: 1;
-      padding: 10px 0;
       background: #2d2d3f;
       border: none;
-      border-radius: 8px;
       color: #e0e0e0;
-      font-size: 16px;
+      padding: 6px 12px;
+      border-radius: 6px;
       cursor: pointer;
-      transition: background 0.2s;
+      font-size: 14px;
     }
     .header-btn:hover {
       background: #3d3d5f;
     }
-    #window-controls {
+    .view-toggle {
       display: flex;
-      gap: 8px;
-      margin-left: auto;
+      gap: 4px;
+      background: #2d2d3f;
+      padding: 4px;
+      border-radius: 6px;
     }
-    .window-btn {
+    .view-btn {
       background: transparent;
       border: none;
       color: #888;
-      font-size: 18px;
-      cursor: pointer;
-      padding: 0 4px;
-    }
-    .window-btn:hover {
-      color: #e0e0e0;
-    }
-
-    /* 日期导航栏 */
-    #date-nav {
-      padding: 12px 16px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      border-bottom: 1px solid #2d2d3f;
-    }
-    .date-arrow {
-      background: transparent;
-      border: none;
-      color: #888;
-      font-size: 16px;
+      padding: 4px 8px;
+      border-radius: 4px;
       cursor: pointer;
     }
-    .date-arrow:hover {
-      color: #e0e0e0;
-    }
-    .date-list {
-      flex: 1;
-      display: flex;
-      justify-content: space-between;
-    }
-    .date-item {
-      text-align: center;
-      padding: 8px 4px;
-      border-radius: 8px;
-      cursor: pointer;
-      min-width: 40px;
-      position: relative;
-    }
-    .date-item.active {
-      background: #2ea043;
+    .view-btn.active {
+      background: #409eff;
       color: #fff;
     }
-    .date-item .week {
-      font-size: 14px;
-      display: block;
-    }
-    .date-item .date {
-      font-size: 12px;
-      opacity: 0.8;
-      display: block;
-    }
-    .date-dot {
-      position: absolute;
-      top: 4px;
-      right: 4px;
-      width: 6px;
-      height: 6px;
-      background: #f9c74f;
-      border-radius: 50%;
-    }
-
-    /* 待办列表 */
-    #schedule-body {
-      padding: 16px;
-      max-height: 420px;
-      overflow-y: auto;
-    }
-    .todo-item {
+    .month-nav {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 10px 0;
-      border-bottom: 1px solid #2d2d3f;
+      gap: 8px;
     }
-    .todo-checkbox {
-      width: 18px;
-      height: 18px;
-      accent-color: #2ea043;
+    .month-arrow {
+      background: transparent;
+      border: none;
+      color: #888;
+      font-size: 16px;
       cursor: pointer;
     }
-    .todo-content {
-      flex: 1;
-      font-size: 16px;
+    .month-arrow:hover {
+      color: #e0e0e0;
     }
-    .todo-content.completed {
+    /* 主内容区：侧边栏+月历 */
+    #calendar-main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+    /* 侧边栏 */
+    #sidebar {
+      width: 48px;
+      background: #161622;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px 0;
+      gap: 24px;
+      border-right: 1px solid #2d2d3f;
+    }
+    .sidebar-icon {
+      font-size: 20px;
+      color: #888;
+      cursor: pointer;
+    }
+    .sidebar-icon.active, .sidebar-icon:hover {
+      color: #409eff;
+    }
+    /* 月历区域 */
+    #calendar-content {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+    }
+    /* 月历表头（星期） */
+    #calendar-weekdays {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .weekday {
+      text-align: center;
+      font-size: 14px;
+      color: #888;
+      padding: 8px 0;
+    }
+    /* 月历网格 */
+    #calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      grid-template-rows: repeat(6, 120px);
+      gap: 8px;
+    }
+    .calendar-day {
+      background: #252535;
+      border-radius: 8px;
+      padding: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .day-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .day-number {
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .day-number.today {
+      background: #409eff;
+      color: #fff;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .day-festival {
+      font-size: 12px;
+      color: #2ea043;
+    }
+    .day-schedules {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .schedule-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .schedule-item:hover {
+      opacity: 0.8;
+    }
+    .schedule-checkbox {
+      width: 12px;
+      height: 12px;
+      accent-color: #2ea043;
+    }
+    .schedule-time {
+      color: #aaa;
+      font-size: 11px;
+    }
+    .schedule-content {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .schedule-item.completed .schedule-content {
       text-decoration: line-through;
       color: #666;
     }
-    .todo-actions {
+    /* 底部栏 */
+    #calendar-footer {
+      padding: 12px 20px;
+      border-top: 1px solid #2d2d3f;
       display: flex;
-      gap: 12px;
+      justify-content: center;
+      gap: 16px;
     }
-    .todo-btn {
+    .footer-view-btn {
       background: transparent;
       border: none;
       color: #888;
-      font-size: 16px;
+      padding: 6px 12px;
+      border-radius: 6px;
       cursor: pointer;
-    }
-    .todo-btn:hover {
-      color: #e0e0e0;
-    }
-    .add-todo-btn {
-      width: 100%;
-      padding: 12px;
-      margin-top: 12px;
-      background: #2d2d3f;
-      border: 1px dashed #444;
-      border-radius: 8px;
-      color: #888;
-      font-size: 20px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .add-todo-btn:hover {
-      border-color: #666;
-      color: #e0e0e0;
-    }
-
-    /* 底部统计 */
-    #schedule-footer {
-      padding: 12px 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-top: 1px solid #2d2d3f;
       font-size: 14px;
-      color: #888;
     }
-    .footer-icons {
-      display: flex;
-      gap: 16px;
+    .footer-view-btn.active {
+      color: #409eff;
+      font-weight: 500;
     }
-    .footer-icon {
+    .upgrade-btn {
+      position: absolute;
+      bottom: 60px;
+      right: 20px;
+      background: #ff9f43;
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 20px;
       cursor: pointer;
-      font-size: 18px;
+      font-size: 12px;
     }
-    .footer-icon:hover {
-      color: #e0e0e0;
+    /* 滚动条美化 */
+    ::-webkit-scrollbar {
+      width: 6px;
     }
-    .todo-count {
-      color: #888;
+    ::-webkit-scrollbar-track {
+      background: #2d2d3f;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #444;
+      border-radius: 3px;
     }
   `);
 
   // 核心数据类
-  class ScheduleManager {
+  class CalendarManager {
     constructor() {
       this.schedules = this.getLocalSchedules();
       this.currentDate = new Date();
+      this.currentView = "month"; // 默认月视图
       this.initUI();
       this.bindEvent();
-      this.renderDateNav();
-      this.renderTodoList();
+      this.renderCalendar();
     }
 
     // 读取本地存储
@@ -242,208 +305,203 @@ const AI_CONFIG = {
     // 初始化UI
     initUI() {
       const html = `
-        <div id="schedule-container">
-          <div id="schedule-header">
-            <button class="header-btn" id="focus-btn">开始专注</button>
-            <button class="header-btn" id="remind-btn">添加提醒</button>
-            <div id="window-controls">
-              <button class="window-btn" id="min-btn">−</button>
-              <button class="window-btn" id="close-btn">×</button>
+        <div id="calendar-container">
+          <!-- 顶部栏 -->
+          <div id="calendar-header">
+            <span class="header-icon">📅</span>
+            <span id="month-title">${this.getMonthTitle()}</span>
+            <div class="header-actions">
+              <button class="header-btn" id="add-btn">+ 添加</button>
+              <div class="view-toggle">
+                <button class="view-btn" id="view-month">月</button>
+                <button class="view-btn" id="view-week">周</button>
+                <button class="view-btn" id="view-day">日</button>
+              </div>
+              <div class="month-nav">
+                <button class="month-arrow" id="prev-month">‹</button>
+                <button class="month-arrow" id="next-month">›</button>
+              </div>
+              <span class="header-icon">⋮</span>
             </div>
           </div>
-          <div id="date-nav">
-            <button class="date-arrow" id="prev-week">←</button>
-            <div class="date-list" id="date-list"></div>
-            <button class="date-arrow" id="next-week">→</button>
-          </div>
-          <div id="schedule-body">
-            <div id="todo-list"></div>
-            <button class="add-todo-btn" id="add-todo">+</button>
-          </div>
-          <div id="schedule-footer">
-            <div class="footer-icons">
-              <span class="footer-icon">☰</span>
-              <span class="footer-icon">🗓</span>
+          <!-- 主内容区 -->
+          <div id="calendar-main">
+            <!-- 侧边栏 -->
+            <div id="sidebar">
+              <span class="sidebar-icon">☑️</span>
+              <span class="sidebar-icon active">🗓</span>
+              <span class="sidebar-icon">📊</span>
+              <span class="sidebar-icon">🔍</span>
+              <span class="sidebar-icon">⚙️</span>
             </div>
-            <div class="todo-count" id="todo-count">今0 总0</div>
+            <!-- 月历内容 -->
+            <div id="calendar-content">
+              <div id="calendar-weekdays">
+                <div class="weekday">周日</div>
+                <div class="weekday">周一</div>
+                <div class="weekday">周二</div>
+                <div class="weekday">周三</div>
+                <div class="weekday">周四</div>
+                <div class="weekday">周五</div>
+                <div class="weekday">周六</div>
+              </div>
+              <div id="calendar-grid"></div>
+            </div>
           </div>
+          <!-- 底部栏 -->
+          <div id="calendar-footer">
+            <button class="footer-view-btn" id="view-year">年视图</button>
+            <button class="footer-view-btn active" id="view-month-footer">月视图</button>
+            <button class="footer-view-btn" id="view-week-footer">周视图</button>
+            <button class="footer-view-btn" id="view-day-footer">日视图</button>
+            <button class="footer-view-btn" id="view-schedule">日程视图</button>
+            <button class="footer-view-btn" id="view-multi">多日视图</button>
+            <button class="footer-view-btn" id="view-multi-week">多周视图</button>
+          </div>
+          <button class="upgrade-btn">立即升级</button>
         </div>
       `;
       document.body.insertAdjacentHTML("beforeend", html);
       this.dom = {
-        container: document.getElementById("schedule-container"),
-        dateList: document.getElementById("date-list"),
-        todoList: document.getElementById("todo-list"),
-        todoCount: document.getElementById("todo-count"),
-        addTodo: document.getElementById("add-todo"),
-        prevWeek: document.getElementById("prev-week"),
-        nextWeek: document.getElementById("next-week"),
-        minBtn: document.getElementById("min-btn"),
-        closeBtn: document.getElementById("close-btn"),
-        focusBtn: document.getElementById("focus-btn"),
-        remindBtn: document.getElementById("remind-btn"),
+        container: document.getElementById("calendar-container"),
+        monthTitle: document.getElementById("month-title"),
+        prevMonth: document.getElementById("prev-month"),
+        nextMonth: document.getElementById("next-month"),
+        addBtn: document.getElementById("add-btn"),
+        calendarGrid: document.getElementById("calendar-grid"),
       };
     }
 
     // 绑定事件
     bindEvent() {
-      // 拖拽
-      this.dragElement(this.dom.container);
-      // 最小化/关闭
-      this.dom.minBtn.onclick = () => this.dom.container.style.display = "none";
-      this.dom.closeBtn.onclick = () => this.dom.container.remove();
-      // 周切换
-      this.dom.prevWeek.onclick = () => {
-        this.currentDate.setDate(this.currentDate.getDate() - 7);
-        this.renderDateNav();
-        this.renderTodoList();
+      // 月份切换
+      this.dom.prevMonth.onclick = () => {
+        this.currentDate.setMonth(this.currentDate.getMonth() - 1);
+        this.renderCalendar();
       };
-      this.dom.nextWeek.onclick = () => {
-        this.currentDate.setDate(this.currentDate.getDate() + 7);
-        this.renderDateNav();
-        this.renderTodoList();
+      this.dom.nextMonth.onclick = () => {
+        this.currentDate.setMonth(this.currentDate.getMonth() + 1);
+        this.renderCalendar();
       };
-      // 添加待办
-      this.dom.addTodo.onclick = () => this.addTodo("新待办");
-      // 专注/提醒按钮（可扩展功能）
-      this.dom.focusBtn.onclick = () => alert("专注模式待实现");
-      this.dom.remindBtn.onclick = () => {
-        const content = prompt("请输入提醒内容：");
-        if (content) this.addTodo(content);
+      // 添加日程
+      this.dom.addBtn.onclick = () => {
+        const content = prompt("请输入日程内容：");
+        if (content) {
+          const time = prompt("请输入时间（如 14:00）：") || "";
+          this.addSchedule(content, time);
+        }
       };
-    }
-
-    // 拖拽实现
-    dragElement(elem) {
-      let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-      const header = document.getElementById("schedule-header");
-      header.onmousedown = dragStart;
-      function dragStart(e) {
-        e.preventDefault();
-        pos3 = e.clientX;
-        pos4 = e.clientY;
-        document.onmouseup = dragEnd;
-        document.onmousemove = dragMove;
-      }
-      function dragMove(e) {
-        e.preventDefault();
-        pos1 = pos3 - e.clientX;
-        pos2 = pos4 - e.clientY;
-        pos3 = e.clientX;
-        pos4 = e.clientY;
-        elem.style.top = (elem.offsetTop - pos2) + "px";
-        elem.style.right = "auto";
-        elem.style.left = (elem.offsetLeft - pos1) + "px";
-      }
-      function dragEnd() {
-        document.onmouseup = null;
-        document.onmousemove = null;
-      }
-    }
-
-    // 渲染日期导航
-    renderDateNav() {
-      const weekDays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-      const startOfWeek = new Date(this.currentDate);
-      startOfWeek.setDate(this.currentDate.getDate() - this.currentDate.getDay() + 1); // 周一为起点
-      let html = "";
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(startOfWeek);
-        d.setDate(startOfWeek.getDate() + i);
-        const isToday = d.toDateString() === new Date().toDateString();
-        const hasSchedule = this.schedules.some(s => s.date === d.toISOString().split("T")[0]);
-        html += `
-          <div class="date-item ${isToday ? "active" : ""}" data-date="${d.toISOString().split("T")[0]}">
-            <span class="week">${weekDays[i]}</span>
-            <span class="date">${d.getMonth()+1}-${d.getDate()}</span>
-            ${hasSchedule ? '<span class="date-dot"></span>' : ''}
-          </div>
-        `;
-      }
-      this.dom.dateList.innerHTML = html;
-      // 绑定日期点击
-      document.querySelectorAll(".date-item").forEach(item => {
-        item.onclick = () => {
-          this.currentDate = new Date(item.dataset.date);
-          this.renderDateNav();
-          this.renderTodoList();
+      // 视图切换（简化实现，仅月视图可用）
+      document.querySelectorAll(".view-btn, .footer-view-btn").forEach(btn => {
+        btn.onclick = () => {
+          document.querySelectorAll(".view-btn, .footer-view-btn").forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
         };
       });
     }
 
-    // 渲染待办列表
-    renderTodoList() {
-      const todayStr = new Date().toISOString().split("T")[0];
-      const currentDateStr = this.currentDate.toISOString().split("T")[0];
-      const currentSchedules = this.schedules.filter(s => s.date === currentDateStr);
+    // 获取月份标题
+    getMonthTitle() {
+      return `${this.currentDate.getFullYear()}年${this.currentDate.getMonth() + 1}月`;
+    }
 
+    // 渲染月历
+    renderCalendar() {
+      this.dom.monthTitle.textContent = this.getMonthTitle();
+      const year = this.currentDate.getFullYear();
+      const month = this.currentDate.getMonth();
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      const today = new Date();
+
+      // 计算月历网格需要填充的日期
+      const days = [];
+      // 填充上月剩余日期
+      const firstDayOfWeek = firstDay.getDay(); // 0=周日, 6=周六
+      for (let i = 0; i < firstDayOfWeek; i++) {
+        days.push(new Date(year, month, -firstDayOfWeek + i + 1));
+      }
+      // 填充当月日期
+      for (let i = 1; i <= lastDay.getDate(); i++) {
+        days.push(new Date(year, month, i));
+      }
+      // 填充下月剩余日期，补满6行（42天）
+      while (days.length < 42) {
+        days.push(new Date(year, month + 1, days.length - firstDayOfWeek + 1));
+      }
+
+      // 渲染日期格子
       let html = "";
-      currentSchedules.forEach(item => {
+      days.forEach(day => {
+        const dateStr = day.toISOString().split("T")[0];
+        const isCurrentMonth = day.getMonth() === month;
+        const isToday = day.toDateString() === today.toDateString();
+        const daySchedules = this.schedules.filter(s => s.date === dateStr);
+        const festival = this.getFestival(day); // 简单节日模拟
+
         html += `
-          <div class="todo-item" data-id="${item.id}">
-            <input type="checkbox" class="todo-checkbox" ${item.completed ? "checked" : ""}>
-            <span class="todo-content ${item.completed ? "completed" : ""}">${item.content}</span>
-            <div class="todo-actions">
-              <button class="todo-btn edit-btn">✏️</button>
-              <button class="todo-btn del-btn">🗑️</button>
+          <div class="calendar-day ${isCurrentMonth ? "" : "other-month"}">
+            <div class="day-header">
+              <span class="day-number ${isToday ? "today" : ""}">${day.getDate()}</span>
+              ${festival ? `<span class="day-festival">${festival}</span>` : ""}
+            </div>
+            <div class="day-schedules">
+              ${daySchedules.map(s => `
+                <div class="schedule-item ${s.completed ? "completed" : ""}" data-id="${s.id}" style="background: ${s.color}">
+                  <input type="checkbox" class="schedule-checkbox" ${s.completed ? "checked" : ""}>
+                  <span class="schedule-time">${s.time}</span>
+                  <span class="schedule-content">${s.content}</span>
+                </div>
+              `).join("")}
             </div>
           </div>
         `;
       });
-      this.dom.todoList.innerHTML = html;
+      this.dom.calendarGrid.innerHTML = html;
 
-      // 绑定待办事件
-      document.querySelectorAll(".todo-item").forEach(item => {
-        const checkbox = item.querySelector(".todo-checkbox");
-        const editBtn = item.querySelector(".edit-btn");
-        const delBtn = item.querySelector(".del-btn");
+      // 绑定日程事件
+      document.querySelectorAll(".schedule-item").forEach(item => {
+        const checkbox = item.querySelector(".schedule-checkbox");
         const id = item.dataset.id;
-
         checkbox.onchange = () => this.toggleComplete(id);
-        editBtn.onclick = () => {
-          const newContent = prompt("编辑待办：", this.schedules.find(s => s.id === id).content);
-          if (newContent) this.editTodo(id, newContent);
-        };
-        delBtn.onclick = () => this.deleteTodo(id);
       });
-
-      // 更新统计
-      const todayCount = this.schedules.filter(s => s.date === todayStr).length;
-      const totalCount = this.schedules.length;
-      this.dom.todoCount.textContent = `今${todayCount} 总${totalCount}`;
     }
 
-    // 基础待办操作
-    addTodo(content) {
+    // 模拟节日（可扩展）
+    getFestival(day) {
+      const festivals = {
+        "8-15": "中元节",
+        "9-2": "白露",
+        "9-10": "教师节",
+        "9-22": "秋分",
+        "9-29": "中秋节",
+      };
+      const key = `${day.getMonth() + 1}-${day.getDate()}`;
+      return festivals[key] || "";
+    }
+
+    // 基础日程操作
+    addSchedule(content, time = "") {
       if (!content) return;
-      const todo = {
+      const colors = ["#409eff", "#67c23a", "#e6a23c", "#f56c6c", "#909399", "#8e44ad"];
+      const schedule = {
         id: this.generateId(),
         content: content,
+        time: time,
+        date: new Date().toISOString().split("T")[0], // 默认今天
+        color: colors[Math.floor(Math.random() * colors.length)],
         completed: false,
-        date: this.currentDate.toISOString().split("T")[0],
       };
-      this.schedules.push(todo);
+      this.schedules.push(schedule);
       this.saveLocalSchedules();
-      this.renderTodoList();
-      this.renderDateNav();
+      this.renderCalendar();
     }
-    deleteTodo(id) {
-      this.schedules = this.schedules.filter(s => s.id !== id);
-      this.saveLocalSchedules();
-      this.renderTodoList();
-      this.renderDateNav();
-    }
+
     toggleComplete(id) {
-      const todo = this.schedules.find(s => s.id === id);
-      todo.completed = !todo.completed;
+      const schedule = this.schedules.find(s => s.id === id);
+      schedule.completed = !schedule.completed;
       this.saveLocalSchedules();
-      this.renderTodoList();
-    }
-    editTodo(id, content) {
-      const todo = this.schedules.find(s => s.id === id);
-      todo.content = content;
-      this.saveLocalSchedules();
-      this.renderTodoList();
+      this.renderCalendar();
     }
 
     // AI处理核心（保留原功能）
@@ -453,7 +511,7 @@ const AI_CONFIG = {
         return;
       }
       const systemPrompt = `你是日程助手，仅返回标准化JSON指令，无任何其他内容！支持类型：
-      1.add:添加 → {"type":"add","data":{"content":"日程内容"}}
+      1.add:添加 → {"type":"add","data":{"content":"日程内容","time":"14:00"}}
       2.delete:删除 → {"type":"delete","keyword":"关键词"} / {"type":"delete","id":"id"}
       3.complete:标记完成 → {"type":"complete","id":"id"} / {"type":"complete"}(全部)
       4.clear:清空 → {"type":"clear"}
@@ -482,36 +540,39 @@ const AI_CONFIG = {
         alert("AI请求失败：" + err.message);
       }
     }
+
     executeAiCommand(cmd) {
       switch (cmd.type) {
         case "add":
-          this.addTodo(cmd.data.content);
+          this.addSchedule(cmd.data.content, cmd.data.time || "");
           break;
         case "delete":
-          if (cmd.id) this.deleteTodo(cmd.id);
-          else if (cmd.keyword) {
+          if (cmd.id) {
+            this.schedules = this.schedules.filter( => .id !== cmd.id);
+          } else if (cmd.keyword) {
             this.schedules = this.schedules.filter( => !.content.includes(cmd.keyword));
-            this.saveLocalSchedules();
-            this.renderTodoList();
-            this.renderDateNav();
           }
+          this.saveLocalSchedules();
+          this.renderCalendar();
           break;
         case "complete":
-          if (cmd.id) this.schedules.find( => .id === cmd.id).completed = true;
-          else this.schedules.forEach( => .completed = true);
+          if (cmd.id) {
+            this.schedules.find( => .id === cmd.id).completed = true;
+          } else {
+            this.schedules.forEach( => .completed = true);
+          }
           this.saveLocalSchedules();
-          this.renderTodoList();
+          this.renderCalendar();
           break;
         case "clear":
           this.schedules = [];
           this.saveLocalSchedules();
-          this.renderTodoList();
-          this.renderDateNav();
+          this.renderCalendar();
           break;
       }
     }
   }
 
   // 启动脚本
-  new ScheduleManager();
+  new CalendarManager();
 })();
