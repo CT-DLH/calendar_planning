@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.v": "verilog",
+        "*.ttml": "xml",
+        "*.ttss": "css"
+    }
+}
