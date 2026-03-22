@@ -51,6 +51,7 @@
     let recycleBin = [];
     let currentDate = new Date();
     let currentView = 'month'; // 视图模式：day, week, month
+    let hideCompleted = false; // 是否隐藏已完成的日程
 
     // ===================== 样式（深色主题） =====================
     GM_addStyle(`
@@ -108,6 +109,10 @@
                     <button id="prev-period" class="px-2 py-1 bg-[#252535] rounded text-xs">←</button>
                     <span id="period-title" class="text-sm font-medium"></span>
                     <button id="next-period" class="px-2 py-1 bg-[#252535] rounded text-xs">→</button>
+                    <label class="flex items-center gap-1 text-xs">
+                        <input type="checkbox" id="hide-completed" class="rounded text-blue-500">
+                        <span>隐藏已完成</span>
+                    </label>
                 </div>
             </div>
 
@@ -238,7 +243,10 @@
             const month = currentDate.getMonth();
             const day = currentDate.getDate();
             const dateStr = `${year}-${String(month+1).padStart(2,0)}-${String(day).padStart(2,0)}`;
-            const daySchedules = schedules.filter(s => s.date === dateStr);
+            let daySchedules = schedules.filter(s => s.date === dateStr);
+            if (hideCompleted) {
+                daySchedules = daySchedules.filter(s => !s.completed);
+            }
             const today = new Date();
             const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
 
@@ -251,18 +259,24 @@
             cell.className = `calendar-day p-3 rounded bg-[#252535] min-h-[500px] relative ${isToday ? 'ring-1 ring-blue-500' : ''}`;
             cell.innerHTML = `
                 <div class="text-sm font-medium ${isToday ? 'text-blue-400' : 'text-gray-300'}">${day}日</div>
-                <div class="mt-2 space-y-2 max-h-[450px] overflow-y-auto">
+                <div class="mt-2 space-y-2 max-h-[400px] overflow-y-auto">
                     ${daySchedules.length > 0 ? daySchedules.map(s => `
                         <div class="text-xs px-2 py-1 rounded ${s.completed ? 'bg-gray-600 line-through' : 'bg-blue-500/30'}" data-id="${s.id}">
                             <div class="flex justify-between items-center">
-                                <span>${s.time} ${s.content}</span>
+                                <div class="flex items-center gap-2">
+                                    <input type="checkbox" class="schedule-checkbox rounded text-blue-500" ${s.completed ? 'checked' : ''}>
+                                    <span>${s.time} ${s.content}</span>
+                                </div>
                                 ${s.tag ? `<span class="tag-${s.tag} text-[9px] px-1 py-0.5 rounded">${getTagName(s.tag)}</span>` : ''}
                             </div>
                             ${s.subtasks && s.subtasks.length > 0 ? `
                                 <div class="subtasks mt-1 space-y-1">
                                     ${s.subtasks.map(st => `
                                         <div class="subtask px-1 py-0.5 rounded ${st.completed ? 'bg-gray-500 line-through' : 'bg-blue-400/30'}" data-subtask-id="${st.id}">
-                                            ${st.content}
+                                            <div class="flex items-center gap-2">
+                                                <input type="checkbox" class="subtask-checkbox rounded text-blue-500" ${st.completed ? 'checked' : ''}>
+                                                <span>${st.content}</span>
+                                            </div>
                                         </div>
                                     `).join('')}
                                 </div>
@@ -270,8 +284,36 @@
                         </div>
                     `).join('') : '<div class="text-gray-400 text-xs">无日程</div>'}
                 </div>
+                <div class="mt-3">
+                    <input type="text" id="day-input" placeholder="输入日程内容（Enter确认，Shift+Enter换行）" class="w-full px-3 py-2 text-xs border border-gray-600 rounded-lg bg-[#252535] text-white">
+                </div>
             `;
             grid.appendChild(cell);
+
+            // 绑定输入框事件
+            const dayInput = document.getElementById('day-input');
+            if (dayInput) {
+                dayInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        const content = dayInput.value.trim();
+                        if (content) {
+                            const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+                            const newSchedule = {
+                                id: generateId(),
+                                content,
+                                time,
+                                date: dateStr,
+                                completed: false,
+                                tag: 'normal',
+                                subtasks: []
+                            };
+                            saveSchedules([...getSchedules(), newSchedule]);
+                            dayInput.value = '';
+                        }
+                    }
+                });
+            }
         }
 
         function renderWeekView() {
@@ -291,7 +333,10 @@
                 currentDay.setDate(startOfWeek.getDate() + i);
                 const dayStr = currentDay.getDate();
                 const dateStr = `${currentDay.getFullYear()}-${String(currentDay.getMonth()+1).padStart(2,0)}-${String(dayStr).padStart(2,0)}`;
-                const daySchedules = schedules.filter(s => s.date === dateStr);
+                let daySchedules = schedules.filter(s => s.date === dateStr);
+                if (hideCompleted) {
+                    daySchedules = daySchedules.filter(s => !s.completed);
+                }
                 const isToday = dayStr === today.getDate() && currentDay.getMonth() === today.getMonth() && currentDay.getFullYear() === today.getFullYear();
 
                 const cell = document.createElement('div');
@@ -301,7 +346,10 @@
                     <div class="mt-1 space-y-1 max-h-[100px] overflow-y-auto">
                         ${daySchedules.map(s => `
                             <div class="text-[10px] px-1 py-0.5 rounded ${s.completed ? 'bg-gray-600 line-through' : 'bg-blue-500/30'}" data-id="${s.id}">
-                                ${s.time} ${s.content}
+                                <div class="flex items-center gap-1">
+                                    <input type="checkbox" class="schedule-checkbox rounded text-blue-500" ${s.completed ? 'checked' : ''}>
+                                    <span>${s.time} ${s.content}</span>
+                                </div>
                             </div>
                         `).join('')}
                     </div>
@@ -328,7 +376,10 @@
 
             function addDayCell(day, isCurrent) {
                 const dateStr = day ? `${year}-${String(month+1).padStart(2,0)}-${String(day).padStart(2,0)}` : '';
-                const daySchedules = schedules.filter(s => s.date === dateStr);
+                let daySchedules = schedules.filter(s => s.date === dateStr);
+                if (hideCompleted) {
+                    daySchedules = daySchedules.filter(s => !s.completed);
+                }
                 const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
 
                 const cell = document.createElement('div');
@@ -338,7 +389,10 @@
                     <div class="mt-1 space-y-1 max-h-[60px] overflow-y-auto">
                         ${daySchedules.map(s => `
                             <div class="text-[10px] px-1 py-0.5 rounded ${s.completed ? 'bg-gray-600 line-through' : 'bg-blue-500/30'}" data-id="${s.id}">
-                                ${s.time} ${s.content}
+                                <div class="flex items-center gap-1">
+                                    <input type="checkbox" class="schedule-checkbox rounded text-blue-500" ${s.completed ? 'checked' : ''}>
+                                    <span>${s.time} ${s.content}</span>
+                                </div>
                             </div>
                         `).join('')}
                     </div>
@@ -365,6 +419,15 @@
         document.getElementById('view-day').onclick = () => { currentView = 'day'; renderCalendar(); };
         document.getElementById('view-week').onclick = () => { currentView = 'week'; renderCalendar(); };
         document.getElementById('view-month').onclick = () => { currentView = 'month'; renderCalendar(); };
+
+        // 隐藏已完成日程
+        const hideCompletedCheckbox = document.getElementById('hide-completed');
+        if (hideCompletedCheckbox) {
+            hideCompletedCheckbox.addEventListener('change', (e) => {
+                hideCompleted = e.target.checked;
+                renderCalendar();
+            });
+        }
 
         // 周期切换
         document.getElementById('prev-period').onclick = () => {
@@ -610,18 +673,18 @@
                     }
                 }
                 if (cmd.keyword) {
-                    const schedulesToDelete = list.filter( => .content.includes(cmd.keyword));
+                    const schedulesToDelete = list.filter(s => s.content.includes(cmd.keyword));
                     bin.push(...schedulesToDelete);
-                    list = list.filter( => !.content.includes(cmd.keyword));
+                    list = list.filter(s => !s.content.includes(cmd.keyword));
                 }
                 saveRecycleBin(bin);
                 break;
             case 'complete':
                 if (cmd.id) {
-                    const schedule = list.find( => .id === cmd.id);
+                    const schedule = list.find(s => s.id === cmd.id);
                     if (schedule) schedule.completed = true;
                 } else {
-                    list.forEach( => .completed = true);
+                    list.forEach(s => s.completed = true);
                 }
                 break;
             case 'clear':
@@ -631,7 +694,7 @@
                 break;
             case 'edit':
                 if (cmd.id) {
-                    const schedule = list.find( => .id === cmd.id);
+                    const schedule = list.find(s => s.id === cmd.id);
                     if (schedule) {
                         if (cmd.data.content) schedule.content = cmd.data.content;
                         if (cmd.data.time) schedule.time = cmd.data.time;
@@ -656,6 +719,31 @@
         // 绑定AI发送
         document.getElementById('ai-send-btn').onclick = sendAIScheduleCommand;
         document.getElementById('close-btn').onclick = () => document.getElementById('calendar-container').remove();
+
+        // 绑定复选框事件
+        document.addEventListener('change', (e) => {
+            if (e.target.classList.contains('schedule-checkbox')) {
+                const scheduleId = e.target.closest('[data-id]').getAttribute('data-id');
+                const list = getSchedules();
+                const schedule = list.find( => .id === scheduleId);
+                if (schedule) {
+                    schedule.completed = e.target.checked;
+                    saveSchedules(list);
+                }
+            } else if (e.target.classList.contains('subtask-checkbox')) {
+                const subtaskId = e.target.closest('[data-subtask-id]').getAttribute('data-subtask-id');
+                const scheduleId = e.target.closest('[data-id]').getAttribute('data-id');
+                const list = getSchedules();
+                const schedule = list.find( => .id === scheduleId);
+                if (schedule && schedule.subtasks) {
+                    const subtask = schedule.subtasks.find(st => st.id === subtaskId);
+                    if (subtask) {
+                        subtask.completed = e.target.checked;
+                        saveSchedules(list);
+                    }
+                }
+            }
+        });
     }
 
     window.addEventListener('load', init);
