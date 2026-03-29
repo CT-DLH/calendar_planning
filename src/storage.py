@@ -19,3 +19,18 @@ class Storage:
             return default
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
+    
+    @staticmethod
+    def save_config(api_key, model):
+        """保存配置（API Key 和模型）"""
+        config = {
+            "api_key": api_key,
+            "model": model
+        }
+        Storage.save("config", config)
+    
+    @staticmethod
+    def load_config():
+        """加载配置"""
+        config = Storage.load("config", {})
+        return config.get("api_key", ""), config.get("model", "")

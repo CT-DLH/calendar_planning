@@ -1,0 +1,30 @@
+{
+  "theme": "dark",
+  "colors": {
+    "primary": "#3b82f6",
+    "secondary": "#10b981",
+    "background": "#121212",
+    "surface": "#1e1e1e",
+    "text": "#e0e0e0",
+    "text_secondary": "#9ca3af",
+    "border": "#333333",
+    "today": "#3b82f6",
+    "card": "#1f2937"
+  },
+  "fonts": {
+    "family": "Arial",
+    "size": {
+      "small": 10,
+      "normal": 12,
+      "medium": 14,
+      "large": 16,
+      "xlarge": 18
+    }
+  },
+  "sizes": {
+    "card_radius": 8,
+    "button_radius": 6,
+    "padding": 8,
+    "spacing": 2
+  }
+}
