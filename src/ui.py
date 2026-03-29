@@ -1,0 +1,1504 @@
+# 界面模块
+import sys
+import os
+from datetime import datetime, timedelta
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
+from src.storage import Storage
+from src.ai import AIClient
+from src.config import MODEL_LIST, DEFAULT_STYLE, PRESET_STYLES
+from src.system_calendar import SystemCalendar
+from src.calendar_bridge import widget_manager
+
+class ScheduleButton(QPushButton):
+    def __init__(self, text, schedule):
+        super().__init__(text)
+        self.schedule = schedule
+        self.long_press_timer = QTimer(self)
+        self.long_press_timer.setSingleShot(True)
+        self.long_press_timer.timeout.connect(self.on_long_press)
+        self.setStyleSheet("text-align:left;border:none;")
+        
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.long_press_timer.start(500)  # 500ms长按
+        super().mousePressEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        if self.long_press_timer.isActive():
+            self.long_press_timer.stop()
+        super().mouseReleaseEvent(event)
+    
+    def on_long_press(self):
+        # 长按事件处理
+        pass
+
+class ScheduleWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("📅 AI日程管理器")
+        self.setMinimumSize(900, 600)
+        self.resize(1000, 650)
+
+        # 全局状态
+        self.schedules = Storage.load("schedules")
+        self.recycle_bin = Storage.load("recycle_bin")
+        self.habits = Storage.load("habits")
+        self.general_schedules = Storage.load("general")
+        self.current_date = datetime.now()
+        self.current_view = "day"  # 默认显示日视图，避免周视图的问题
+        self.hide_completed = False
+        self.is_requesting = False
+        
+        # 系统日历集成
+        self.system_calendar = SystemCalendar()
+        
+        # 加载样式配置
+        self.current_style = Storage.load("style", DEFAULT_STYLE)
+
+        # 卡片缓存
+        self.card_cache = {}
+
+        # 初始化UI
+        self.init_ui()
+        self.apply_style()
+        self.render_calendar()
+
+    def init_ui(self):
+        # 中央部件
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # 1. 顶部拖拽栏
+        self.drag_bar = QWidget()
+        self.drag_bar.setStyleSheet("background:linear-gradient(to right,#2563eb,#4f46e5);")
+        drag_layout = QHBoxLayout(self.drag_bar)
+        drag_layout.setContentsMargins(10, 8, 10, 8)
+        title = QLabel("📅 日程管理器")
+        title.setStyleSheet("color:white;font-weight:bold;")
+        self.min_btn = QPushButton("−")
+        self.close_btn = QPushButton("×")
+        self.settings_btn = QPushButton("⚙️")
+        for btn in [self.min_btn, self.close_btn, self.settings_btn]:
+            btn.setFixedSize(25, 25)
+            btn.setStyleSheet("color:white;border:none;")
+        drag_layout.addWidget(title)
+        drag_layout.addStretch()
+        drag_layout.addWidget(self.settings_btn)
+        drag_layout.addWidget(self.min_btn)
+        drag_layout.addWidget(self.close_btn)
+        main_layout.addWidget(self.drag_bar)
+
+        # 2. 设置面板（默认隐藏）
+        self.settings_panel = QWidget()
+        self.settings_panel.setStyleSheet("background:#161622;padding:10px;")
+        self.settings_panel.setVisible(False)
+        settings_layout = QVBoxLayout(self.settings_panel)
+        
+        # API Key + 模型
+        row1 = QHBoxLayout()
+        self.api_key = QLineEdit()
+        self.api_key.setPlaceholderText("输入智谱API Key")
+        self.model_select = QComboBox()
+        self.model_select.addItems(MODEL_LIST)
+        row1.addWidget(self.api_key)
+        row1.addWidget(self.model_select)
+        settings_layout.addLayout(row1)
+        
+        # 样式设置
+        style_group = QGroupBox("样式设置")
+        style_layout = QVBoxLayout(style_group)
+        
+        # 预设样式选择
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("预设样式："))
+        self.preset_style_select = QComboBox()
+        self.preset_style_select.addItems(list(PRESET_STYLES.keys()))
+        self.preset_style_select.currentTextChanged.connect(self.load_preset_style)
+        preset_layout.addWidget(self.preset_style_select)
+        style_layout.addLayout(preset_layout)
+        
+        # 颜色设置
+        color_group = QGroupBox("颜色设置")
+        color_layout = QGridLayout(color_group)
+        
+        color_keys = ["primary", "secondary", "background", "surface", "text", "text_secondary", "border", "today", "card"]
+        self.color_pickers = {}
+        
+        for i, key in enumerate(color_keys):
+            label = QLabel(f"{key}：")
+            color_picker = QPushButton()
+            color_picker.setFixedSize(50, 25)
+            color_picker.setStyleSheet(f"background:{self.current_style['colors'][key]};")
+            color_picker.clicked.connect(lambda checked, k=key: self.show_color_dialog(k))
+            self.color_pickers[key] = color_picker
+            color_layout.addWidget(label, i // 3, (i % 3) * 2)
+            color_layout.addWidget(color_picker, i // 3, (i % 3) * 2 + 1)
+        
+        style_layout.addWidget(color_group)
+        
+        # 字体设置
+        font_group = QGroupBox("字体设置")
+        font_layout = QVBoxLayout(font_group)
+        
+        font_family_layout = QHBoxLayout()
+        font_family_layout.addWidget(QLabel("字体："))
+        self.font_family = QComboBox()
+        self.font_family.addItems(["Arial", "SimHei", "Microsoft YaHei", "Times New Roman"])
+        self.font_family.setCurrentText(self.current_style['fonts']['family'])
+        self.font_family.currentTextChanged.connect(self.update_font_family)
+        font_family_layout.addWidget(self.font_family)
+        font_layout.addLayout(font_family_layout)
+        
+        # 字体大小设置
+        font_size_layout = QHBoxLayout()
+        font_size_layout.addWidget(QLabel("字体大小："))
+        self.font_size = QSpinBox()
+        self.font_size.setRange(8, 24)
+        self.font_size.setValue(self.current_style['fonts']['size']['normal'])
+        self.font_size.valueChanged.connect(self.update_font_size)
+        font_size_layout.addWidget(self.font_size)
+        font_layout.addLayout(font_size_layout)
+        
+        style_layout.addWidget(font_group)
+        
+        # 大小设置
+        size_group = QGroupBox("大小设置")
+        size_layout = QVBoxLayout(size_group)
+        
+        # 卡片圆角
+        card_radius_layout = QHBoxLayout()
+        card_radius_layout.addWidget(QLabel("卡片圆角："))
+        self.card_radius = QSpinBox()
+        self.card_radius.setRange(0, 20)
+        self.card_radius.setValue(self.current_style['sizes']['card_radius'])
+        self.card_radius.valueChanged.connect(self.update_card_radius)
+        card_radius_layout.addWidget(self.card_radius)
+        size_layout.addLayout(card_radius_layout)
+        
+        # 按钮圆角
+        button_radius_layout = QHBoxLayout()
+        button_radius_layout.addWidget(QLabel("按钮圆角："))
+        self.button_radius = QSpinBox()
+        self.button_radius.setRange(0, 20)
+        self.button_radius.setValue(self.current_style['sizes']['button_radius'])
+        self.button_radius.valueChanged.connect(self.update_button_radius)
+        button_radius_layout.addWidget(self.button_radius)
+        size_layout.addLayout(button_radius_layout)
+        
+        # 内边距
+        padding_layout = QHBoxLayout()
+        padding_layout.addWidget(QLabel("内边距："))
+        self.padding = QSpinBox()
+        self.padding.setRange(0, 20)
+        self.padding.setValue(self.current_style['sizes']['padding'])
+        self.padding.valueChanged.connect(self.update_padding)
+        padding_layout.addWidget(self.padding)
+        size_layout.addLayout(padding_layout)
+        
+        style_layout.addWidget(size_group)
+        
+        # 保存样式按钮
+        save_style_btn = QPushButton("保存样式")
+        save_style_btn.clicked.connect(self.save_style)
+        style_layout.addWidget(save_style_btn)
+        
+        settings_layout.addWidget(style_group)
+        main_layout.addWidget(self.settings_panel)
+
+        # 3. 视图切换 + 日期导航
+        self.nav_widget = QWidget()
+        self.nav_widget.setStyleSheet("padding:8px;border-bottom:1px solid #374151;")
+        nav_layout = QHBoxLayout(self.nav_widget)
+        # 视图按钮
+        self.view_btns = {
+            "day": QPushButton("日"),
+            "week": QPushButton("周"),
+            "month": QPushButton("月"),
+            "general": QPushButton("长期")
+        }
+        for btn in self.view_btns.values():
+            btn.setFixedSize(30, 25)
+            nav_layout.addWidget(btn)
+        nav_layout.addStretch()
+        # 日期导航
+        self.prev_btn = QPushButton("←")
+        self.title_label = QLabel("日期")
+        self.next_btn = QPushButton("→")
+        self.hide_check = QCheckBox("隐藏已完成")
+        nav_layout.addWidget(self.prev_btn)
+        nav_layout.addWidget(self.title_label)
+        nav_layout.addWidget(self.next_btn)
+        nav_layout.addWidget(self.hide_check)
+        main_layout.addWidget(self.nav_widget)
+
+        # 4. 主内容区（横板布局）
+        content_widget = QWidget()
+        content_layout = QHBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+        # 左侧：日历视图
+        calendar_container = QWidget()
+        calendar_layout = QVBoxLayout(calendar_container)
+        calendar_layout.setContentsMargins(0, 0, 0, 0)
+        calendar_layout.setSpacing(0)
+
+        # 星期栏
+        self.week_bar = QWidget()
+        week_layout = QHBoxLayout(self.week_bar)
+        week_layout.setContentsMargins(5, 5, 5, 5)
+        for w in ["日", "一", "二", "三", "四", "五", "六"]:
+            lbl = QLabel(w)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("font-weight:bold;")
+            week_layout.addWidget(lbl)
+        calendar_layout.addWidget(self.week_bar)
+
+        # 日历网格
+        self.calendar_grid = QWidget()
+        self.grid_layout = QGridLayout(self.calendar_grid)
+        self.grid_layout.setSpacing(2)
+        self.grid_layout.setContentsMargins(5, 5, 5, 5)
+        calendar_layout.addWidget(self.calendar_grid)
+
+        # 右侧：日程列表和操作栏
+        schedule_container = QWidget()
+        schedule_layout = QVBoxLayout(schedule_container)
+        schedule_layout.setContentsMargins(0, 0, 0, 0)
+        schedule_layout.setSpacing(0)
+
+        # 日程列表区域（添加滚动功能）
+        self.schedule_scroll = QScrollArea()
+        self.schedule_scroll.setWidgetResizable(True)
+        self.schedule_list = QWidget()
+        self.schedule_list_layout = QVBoxLayout(self.schedule_list)
+        self.schedule_list_layout.setContentsMargins(10, 10, 10, 10)
+        self.schedule_scroll.setWidget(self.schedule_list)
+        schedule_layout.addWidget(self.schedule_scroll)
+
+        # 底部操作栏
+        self.bottom_widget = QWidget()
+        self.bottom_widget.setStyleSheet("padding:8px;border-top:1px solid #374151;")
+        bottom_layout = QHBoxLayout(self.bottom_widget)
+        self.add_btn = QPushButton("+ 添加日程")
+        self.habit_btn = QPushButton("+ 添加习惯")
+        self.import_btn = QPushButton("导入")
+        self.export_btn = QPushButton("导出")
+        self.bin_btn = QPushButton("回收站")
+        self.clear_btn = QPushButton("清空所有")
+        for btn in [self.add_btn, self.habit_btn, self.import_btn, self.export_btn, self.bin_btn, self.clear_btn]:
+            bottom_layout.addWidget(btn)
+        schedule_layout.addWidget(self.bottom_widget)
+
+        # 添加到主内容区
+        content_layout.addWidget(calendar_container, 1)
+        content_layout.addWidget(schedule_container, 1)
+        main_layout.addWidget(content_widget, 1)
+
+        # 绑定事件
+        self.bind_events()
+        
+        # 拖拽功能变量
+        self.drag_pos = None
+
+    # ===================== 应用样式 =====================
+    def apply_style(self):
+        colors = self.current_style['colors']
+        fonts = self.current_style['fonts']
+        sizes = self.current_style['sizes']
+        
+        style = f"""
+            QMainWindow, QWidget {{background:{colors['background']};color:{colors['text']};}}
+            QLineEdit, QComboBox, QTextEdit, QGroupBox {{
+                background:{colors['surface']};border:1px solid {colors['border']};border-radius:{sizes['button_radius']}px;
+                padding:{sizes['padding']}px;color:{colors['text']};
+                font-family:{fonts['family']};font-size:{fonts['size']['normal']}px;
+            }}
+            QLineEdit:focus, QComboBox:focus, QTextEdit:focus {{
+                border:1px solid {colors['primary']};
+            }}
+            QPushButton {{
+                background:{colors['surface']};border:1px solid {colors['border']};border-radius:{sizes['button_radius']}px;
+                padding:{sizes['padding']}px 10px;color:{colors['text']};
+                font-family:{fonts['family']};font-size:{fonts['size']['normal']}px;
+            }}
+            QPushButton:hover {{background:{colors['card']};}}
+            QPushButton:pressed {{background:{colors['border']};}}
+            QCheckBox {{color:{colors['text']};font-family:{fonts['family']};font-size:{fonts['size']['normal']}px;}}
+            QLabel {{color:{colors['text']};font-family:{fonts['family']};font-size:{fonts['size']['normal']}px;}}
+            QGroupBox {{font-family:{fonts['family']};font-size:{fonts['size']['medium']}px;font-weight:bold;}}
+            QPushButton#green {{background:{colors['secondary']};color:white;}}
+            QPushButton#green:hover {{background:{colors['secondary']};opacity:0.9;}}
+            QPushButton#blue {{background:{colors['primary']};color:white;}}
+            QPushButton#blue:hover {{background:{colors['primary']};opacity:0.9;}}
+            QPushButton#red {{background:#ef4444;color:white;}}
+            QPushButton#red:hover {{background:#dc2626;}}
+            QPushButton#yellow {{background:#f59e0b;color:white;}}
+            QPushButton#yellow:hover {{background:#d97706;}}
+            QPushButton#purple {{background:#8b5cf6;color:white;}}
+            QPushButton#purple:hover {{background:#7c3aed;}}
+        """
+        
+        self.setStyleSheet(style)
+        
+        # 更新拖拽栏样式
+        self.drag_bar.setStyleSheet(f"background:linear-gradient(to right,{colors['primary']},{colors['secondary']});")
+        
+        # 更新设置面板样式
+        self.settings_panel.setStyleSheet(f"background:{colors['card']};padding:10px;")
+        
+        # 更新导航栏样式
+        self.nav_widget.setStyleSheet(f"padding:{sizes['padding']}px;border-bottom:1px solid {colors['border']};")
+        
+        # 更新底部操作栏样式
+        self.bottom_widget.setStyleSheet(f"padding:{sizes['padding']}px;border-top:1px solid {colors['border']};")
+        
+        # 按钮颜色标记
+        self.clear_btn.setObjectName("red")
+        self.export_btn.setObjectName("yellow")
+        self.import_btn.setObjectName("purple")
+
+    # ===================== 事件绑定 =====================
+    def bind_events(self):
+        self.close_btn.clicked.connect(self.close)
+        self.min_btn.clicked.connect(self.showMinimized)
+        self.settings_btn.clicked.connect(self.toggle_settings_panel)
+        self.hide_check.clicked.connect(lambda: setattr(self, 'hide_completed', self.hide_check.isChecked()) or self.render_calendar())
+        # 视图切换
+        self.view_btns["day"].clicked.connect(lambda: self.switch_view("day"))
+        self.view_btns["week"].clicked.connect(lambda: self.switch_view("week"))
+        self.view_btns["month"].clicked.connect(lambda: self.switch_view("month"))
+        self.view_btns["general"].clicked.connect(lambda: self.switch_view("general"))
+        # 日期导航
+        self.prev_btn.clicked.connect(self.prev_period)
+        self.next_btn.clicked.connect(self.next_period)
+        # 功能按钮
+        self.add_btn.clicked.connect(self.add_schedule)
+        self.habit_btn.clicked.connect(self.add_habit)
+        self.import_btn.clicked.connect(self.import_data)
+        self.export_btn.clicked.connect(self.export_data)
+        self.bin_btn.clicked.connect(self.open_recycle_bin)
+        self.clear_btn.clicked.connect(self.clear_all)
+
+    # ===================== 视图切换 =====================
+    def switch_view(self, view):
+        self.current_view = view
+        self.render_calendar()
+
+    def prev_period(self):
+        if self.current_view == "day":
+            self.current_date -= timedelta(days=1)
+        elif self.current_view == "week":
+            self.current_date -= timedelta(days=7)
+        elif self.current_view == "month":
+            self.current_date = self.current_date.replace(day=1) - timedelta(days=1)
+        self.render_calendar()
+
+    def next_period(self):
+        if self.current_view == "day":
+            self.current_date += timedelta(days=1)
+        elif self.current_view == "week":
+            self.current_date += timedelta(days=7)
+        elif self.current_view == "month":
+            month = self.current_date.month % 12 + 1
+            year = self.current_date.year + (1 if month == 1 else 0)
+            self.current_date = self.current_date.replace(year=year, month=month)
+        self.render_calendar()
+
+    # ===================== 日历渲染 =====================
+    def render_calendar(self):
+        try:
+            # 使用 widget_manager 安全清空网格和日程列表
+            widget_manager.clear_layout(self.grid_layout)
+            widget_manager.clear_layout(self.schedule_list_layout)
+
+            # 使用QApplication.processEvents()确保UI响应
+            QApplication.processEvents()
+
+            if self.current_view == "day":
+                self.render_day()
+            elif self.current_view == "week":
+                # 简化周视图实现，避免可能的崩溃问题
+                self.title_label.setText(self.current_date.strftime("%Y年%m月第%W周"))
+                self.week_bar.hide()  # 隐藏星期栏，避免可能的问题
+                
+                # 左侧：显示简单的周信息
+                week_widget = QWidget()
+                week_widget.setStyleSheet("background:#1f2937;border-radius:8px;padding:16px;")
+                week_lay = QVBoxLayout(week_widget)
+                week_lay.addWidget(QLabel("📅 周视图"))
+                week_lay.addWidget(QLabel(f"当前周：{self.current_date.strftime('%Y年%m月第%W周')}"))
+                week_lay.addWidget(QLabel("周视图功能正在维护中"))
+                self.grid_layout.addWidget(week_widget, 0, 0)
+                
+                # 右侧：本周日程列表
+                self.schedule_list_layout.addWidget(QLabel("📅 本周日程"))
+                self.schedule_list_layout.addWidget(QLabel("本周暂无日程"))
+            elif self.current_view == "month":
+                self.render_month()
+            elif self.current_view == "general":
+                self.render_general()
+
+            # 再次处理事件，确保UI更新完成
+            QApplication.processEvents()
+        except Exception as e:
+            print(f"Error in render_calendar: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def render_day(self):
+        self.title_label.setText(self.current_date.strftime("%Y年%m月%d日"))
+        self.week_bar.hide()
+
+        day_str = self.current_date.strftime("%Y-%m-%d")
+        day_schedules = [s for s in self.schedules if s["date"] == day_str]
+        if self.hide_completed:
+            day_schedules = [s for s in day_schedules if not s["completed"]]
+
+        # 获取当前样式配置
+        colors = self.current_style['colors']
+        sizes = self.current_style['sizes']
+        fonts = self.current_style['fonts']
+
+        # 左侧：日历视图（水平布局优化）
+        day_widget = QWidget()
+        day_widget.setStyleSheet(f"background:{colors['card']};border-radius:{sizes['card_radius']}px;padding:{sizes['padding']}px;")
+        day_lay = QVBoxLayout(day_widget)
+        day_lay.setContentsMargins(sizes['padding'], sizes['padding'], sizes['padding'], sizes['padding'])
+        
+        # 日期标题
+        date_label = QLabel(f"📅 {self.current_date.year}年{self.current_date.month}月{self.current_date.day}日")
+        date_label.setStyleSheet(f"font-size:{fonts['size']['large']}px;font-weight:bold;margin-bottom:{sizes['padding']}px;")
+        day_lay.addWidget(date_label)
+        
+        # 显示当天的日程概览
+        if day_schedules:
+            day_lay.addWidget(QLabel("今日日程："))
+            for s in day_schedules[:3]:  # 只显示前3个日程
+                time_label = QLabel(f"• {s['time']} {s['content']}")
+                time_label.setStyleSheet("margin-left:10px;")
+                day_lay.addWidget(time_label)
+            if len(day_schedules) > 3:
+                day_lay.addWidget(QLabel(f"... 还有 {len(day_schedules) - 3} 个日程"))
+        else:
+            day_lay.addWidget(QLabel("今日暂无日程"))
+        
+        self.grid_layout.addWidget(day_widget, 0, 0)
+
+        # 右侧：日程列表
+        self.schedule_list_layout.addWidget(QLabel(f"📅 {self.current_date.day}日 日程"))
+
+        # 习惯
+        if self.habits:
+            self.schedule_list_layout.addWidget(QLabel("🟣 每日习惯"))
+            for h in self.habits:
+                self.schedule_list_layout.addWidget(QLabel(f"◽ {h['time']} {h['content']}"))
+
+        # 长期日程
+        if self.general_schedules:
+            self.schedule_list_layout.addWidget(QLabel("🟢 长期日程"))
+            for g in self.general_schedules:
+                self.schedule_list_layout.addWidget(QLabel(f"◽ {g['time']} {g['content']}"))
+
+        # 当日日程
+        self.schedule_list_layout.addWidget(QLabel("🔵 当日日程"))
+        if not day_schedules:
+            self.schedule_list_layout.addWidget(QLabel("暂无日程"))
+        else:
+            tag_map = {"normal": "一般", "important": "重要", "urgent": "紧急", "important_urgent": "重要且紧急"}
+            for s in day_schedules:
+                tag_text = tag_map.get(s.get("tag", "normal"), "一般")
+                txt = f"{'✅' if s['completed'] else '◽'} {s['time']} {s['content']} [标签: {tag_text}]"
+                btn = ScheduleButton(txt, s)
+                if s["completed"]:
+                    btn.setStyleSheet("text-align:left;border:none;text-decoration:line-through;color:#9ca3af;")
+                btn.clicked.connect(lambda checked, s=s: self.edit_schedule_direct(s))
+                # 设置长按事件处理
+                btn.on_long_press = lambda s=s: self.on_schedule_long_press(s)
+                self.schedule_list_layout.addWidget(btn)
+                
+                # 显示子任务
+                subtasks = s.get("subtasks", [])
+                if subtasks:
+                    self.schedule_list_layout.addWidget(QLabel("  📋 子任务："))
+                    for subtask in subtasks:
+                        subtask_txt = f"    {'✅' if subtask.get('completed', False) else '◽'} {subtask['content']}"
+                        subtask_lbl = QLabel(subtask_txt)
+                        if subtask.get('completed', False):
+                            subtask_lbl.setStyleSheet("text-decoration:line-through;color:#9ca3af;")
+                        self.schedule_list_layout.addWidget(subtask_lbl)
+
+        # 添加日程（集成 AI 功能）
+        add_layout = QHBoxLayout()
+        self.day_content = QLineEdit()
+        self.day_content.setPlaceholderText("输入日程内容，按下 Enter 键使用 AI 创建日程")
+        self.day_time = QLineEdit()
+        self.day_time.setPlaceholderText("时间")
+        add_layout.addWidget(self.day_content)
+        add_layout.addWidget(self.day_time)
+        self.schedule_list_layout.addLayout(add_layout)
+        self.day_content.returnPressed.connect(self.add_day_schedule_with_ai)
+
+    def render_week(self):
+        try:
+            self.title_label.setText(self.current_date.strftime("%Y年%m月第%W周"))
+            self.week_bar.show()
+            start = self.current_date - timedelta(days=self.current_date.weekday() + 1)
+            
+            # 左侧：周视图日历（水平布局优化）
+            # 清空网格
+            for i in reversed(range(self.grid_layout.count())):
+                widget = self.grid_layout.itemAt(i).widget()
+                if widget:
+                    widget.deleteLater()
+            
+            # 添加日期卡片
+            for i in range(7):
+                day = start + timedelta(days=i)
+                # 创建简单的日期卡片，避免使用样式配置
+                widget = QWidget()
+                widget.setStyleSheet("background:#1f2937;border-radius:8px;padding:8px;")
+                lay = QVBoxLayout(widget)
+                lay.addWidget(QLabel(str(day.day)))
+                lay.addWidget(QLabel("暂无日程"))
+                widget.setMinimumWidth(100)
+                widget.setMinimumHeight(150)
+                self.grid_layout.addWidget(widget, 0, i)
+            
+            # 右侧：本周日程列表
+            self.schedule_list_layout.addWidget(QLabel("📅 本周日程"))
+            self.schedule_list_layout.addWidget(QLabel("本周暂无日程"))
+        except Exception as e:
+            print(f"Error in render_week: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def render_month(self):
+        self.title_label.setText(self.current_date.strftime("%Y年%m月"))
+        self.week_bar.show()
+        first = self.current_date.replace(day=1)
+        start = first - timedelta(days=first.weekday() + 1)
+        
+        # 左侧：月视图日历
+        for i in range(42):
+            day = start + timedelta(days=i)
+            widget = self.create_day_card(day)
+            self.grid_layout.addWidget(widget, i // 7, i % 7)
+        
+        # 右侧：本月日程列表
+        self.schedule_list_layout.addWidget(QLabel("📅 本月日程"))
+        
+        # 获取本月所有日程
+        month_schedules = []
+        year, month = self.current_date.year, self.current_date.month
+        for s in self.schedules:
+            s_date = datetime.strptime(s["date"], "%Y-%m-%d")
+            if s_date.year == year and s_date.month == month:
+                if not self.hide_completed or not s["completed"]:
+                    month_schedules.append(s)
+        
+        if not month_schedules:
+            self.schedule_list_layout.addWidget(QLabel("本月暂无日程"))
+        else:
+            tag_map = {"normal": "一般", "important": "重要", "urgent": "紧急", "important_urgent": "重要且紧急"}
+            for s in month_schedules:
+                tag_text = tag_map.get(s.get("tag", "normal"), "一般")
+                txt = f"{'✅' if s['completed'] else '◽'} {s['date']} {s['time']} {s['content']} [标签: {tag_text}]"
+                btn = ScheduleButton(txt, s)
+                if s["completed"]:
+                    btn.setStyleSheet("text-align:left;border:none;text-decoration:line-through;color:#9ca3af;")
+                btn.clicked.connect(lambda checked, s=s: self.edit_schedule_direct(s))
+                # 设置长按事件处理
+                btn.on_long_press = lambda s=s: self.on_schedule_long_press(s)
+                self.schedule_list_layout.addWidget(btn)
+
+    def create_day_card(self, date):
+        try:
+            # 生成缓存键，避免使用hash(str(self.current_style))
+            cache_key = f"{date.strftime('%Y-%m-%d')}_{self.hide_completed}"
+            
+            # 检查缓存
+            if cache_key in self.card_cache:
+                return self.card_cache[cache_key]
+            
+            w = QWidget()
+            
+            # 检查是否是今天
+            today = datetime.now().date()
+            is_today = date.date() == today
+            
+            # 获取当前样式配置
+            colors = self.current_style['colors']
+            sizes = self.current_style['sizes']
+            fonts = self.current_style['fonts']
+            
+            # 设置卡片样式，今天的卡片有特殊样式
+            if is_today:
+                w.setStyleSheet(f"background:{colors['today']};border-radius:{sizes['card_radius']}px;padding:{sizes['padding']}px;")
+            else:
+                w.setStyleSheet(f"background:{colors['card']};border-radius:{sizes['card_radius']}px;padding:{sizes['padding']}px;")
+            
+            lay = QVBoxLayout(w)
+            lay.setContentsMargins(sizes['padding'], sizes['padding'], sizes['padding'], sizes['padding'])
+            
+            # 日期标签
+            day_label = QLabel(str(date.day))
+            day_label.setStyleSheet(f"font-size:{fonts['size']['medium']}px;font-weight:bold;")
+            lay.addWidget(day_label)
+            
+            # 显示日程
+            day_str = date.strftime("%Y-%m-%d")
+            day_schedules = [s for s in self.schedules if s["date"] == day_str and not (self.hide_completed and s["completed"])]
+            
+            if day_schedules:
+                for s in day_schedules[:3]:  # 最多显示3个日程
+                    time_label = QLabel(f"• {s['time']}")
+                    time_label.setStyleSheet(f"font-size:{fonts['size']['small']}px;margin-top:2px;")
+                    lay.addWidget(time_label)
+                if len(day_schedules) > 3:
+                    more_label = QLabel(f"... 还有 {len(day_schedules) - 3} 个")
+                    more_label.setStyleSheet(f"font-size:{fonts['size']['small']}px;color:{colors['text_secondary']};")
+                    lay.addWidget(more_label)
+            else:
+                empty_label = QLabel("暂无日程")
+                empty_label.setStyleSheet(f"font-size:{fonts['size']['small']}px;color:{colors['text_secondary']};")
+                lay.addWidget(empty_label)
+            
+            # 缓存卡片
+            self.card_cache[cache_key] = w
+            
+            # 限制缓存大小
+            if len(self.card_cache) > 100:
+                # 删除最旧的缓存
+                oldest_key = next(iter(self.card_cache))
+                del self.card_cache[oldest_key]
+            
+            return w
+        except Exception as e:
+            print(f"Error in create_day_card: {e}")
+            import traceback
+            traceback.print_exc()
+            # 返回一个简单的卡片作为 fallback
+            w = QWidget()
+            w.setStyleSheet("background:#1f2937;border-radius:8px;padding:8px;")
+            lay = QVBoxLayout(w)
+            lay.addWidget(QLabel(str(date.day)))
+            lay.addWidget(QLabel("暂无日程"))
+            return w
+
+    def render_general(self):
+        self.title_label.setText("长期日程")
+        self.week_bar.hide()
+        
+        # 左侧：简化显示
+        general_widget = QWidget()
+        general_lay = QVBoxLayout(general_widget)
+        general_lay.addWidget(QLabel("📋 长期日程"))
+        self.grid_layout.addWidget(general_widget, 0, 0)
+        
+        # 右侧：长期日程列表
+        self.schedule_list_layout.addWidget(QLabel("📋 长期日程"))
+        if not self.general_schedules:
+            self.schedule_list_layout.addWidget(QLabel("暂无长期日程"))
+        else:
+            tag_map = {"normal": "一般", "important": "重要", "urgent": "紧急", "important_urgent": "重要且紧急"}
+            for g in self.general_schedules:
+                tag_text = tag_map.get(g.get("tag", "normal"), "一般")
+                txt = f"◽ {g['time']} {g['content']} [标签: {tag_text}]"
+                btn = ScheduleButton(txt, g)
+                btn.clicked.connect(lambda checked, g=g: self.edit_general_schedule_direct(g))
+                # 设置长按事件处理
+                btn.on_long_press = lambda g=g: self.on_general_schedule_long_press(g)
+                self.schedule_list_layout.addWidget(btn)
+                
+                # 显示子任务
+                subtasks = g.get("subtasks", [])
+                if subtasks:
+                    self.schedule_list_layout.addWidget(QLabel("  📋 子任务："))
+                    for subtask in subtasks:
+                        subtask_txt = f"    {'✅' if subtask.get('completed', False) else '◽'} {subtask['content']}"
+                        subtask_lbl = QLabel(subtask_txt)
+                        if subtask.get('completed', False):
+                            subtask_lbl.setStyleSheet("text-decoration:line-through;color:#9ca3af;")
+                        self.schedule_list_layout.addWidget(subtask_lbl)
+
+        # 添加长期日程（集成 AI 功能）
+        add_layout = QHBoxLayout()
+        self.general_content = QLineEdit()
+        self.general_content.setPlaceholderText("输入长期日程内容，按下 Enter 键使用 AI 创建")
+        self.general_time = QLineEdit()
+        self.general_time.setPlaceholderText("时间")
+        add_layout.addWidget(self.general_content)
+        add_layout.addWidget(self.general_time)
+        self.schedule_list_layout.addLayout(add_layout)
+        self.general_content.returnPressed.connect(self.add_general_schedule_with_ai)
+
+    # ===================== 基础功能 =====================
+    def generate_id(self):
+        return str(int(datetime.now().timestamp())) + str(os.urandom(2).hex())
+
+    def add_schedule(self):
+        content, ok = QInputDialog.getText(self, "添加日程", "内容：")
+        if not ok or not content:
+            return
+        time, ok = QInputDialog.getText(self, "时间", "如：14:00")
+        tag, ok = QInputDialog.getItem(self, "选择标签", "标签：", ["一般", "重要", "紧急", "重要且紧急"], 0, False)
+        if not ok:
+            tag = "一般"
+        tag_map = {"一般": "normal", "重要": "important", "紧急": "urgent", "重要且紧急": "important_urgent"}
+        
+        # 添加子任务
+        subtasks = []
+        while True:
+            subtask_content, ok = QInputDialog.getText(self, "添加子任务", "子任务内容（留空结束）：")
+            if not ok or not subtask_content:
+                break
+            subtasks.append({
+                "id": self.generate_id(),
+                "content": subtask_content,
+                "completed": False
+            })
+        
+        self.schedules.append({
+            "id": self.generate_id(), "content": content, "time": time or "",
+            "date": datetime.now().strftime("%Y-%m-%d"), "completed": False,
+            "tag": tag_map[tag], "subtasks": subtasks
+        })
+        Storage.save("schedules", self.schedules)
+        self.render_calendar()
+
+    def add_day_schedule(self):
+        content = self.day_content.text().strip()
+        time = self.day_time.text().strip()
+        if not content:
+            return
+        tag, ok = QInputDialog.getItem(self, "选择标签", "标签：", ["一般", "重要", "紧急", "重要且紧急"], 0, False)
+        if not ok:
+            tag = "一般"
+        tag_map = {"一般": "normal", "重要": "important", "紧急": "urgent", "重要且紧急": "important_urgent"}
+        
+        # 添加子任务
+        subtasks = []
+        while True:
+            subtask_content, ok = QInputDialog.getText(self, "添加子任务", "子任务内容（留空结束）：")
+            if not ok or not subtask_content:
+                break
+            subtasks.append({
+                "id": self.generate_id(),
+                "content": subtask_content,
+                "completed": False
+            })
+        
+        self.schedules.append({
+            "id": self.generate_id(), "content": content, "time": time,
+            "date": self.current_date.strftime("%Y-%m-%d"), "completed": False,
+            "tag": tag_map[tag], "subtasks": subtasks
+        })
+        Storage.save("schedules", self.schedules)
+        self.day_content.clear()
+        self.day_time.clear()
+        self.render_calendar()
+
+    def add_day_schedule_with_ai(self):
+        content = self.day_content.text().strip()
+        time = self.day_time.text().strip()
+        if not content:
+            return
+        
+        api_key = self.api_key.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "提示", "请先在设置中填写 API Key")
+            return
+        
+        try:
+            cmd = AIClient.run_command(api_key, self.model_select.currentText(), content)
+            if cmd["type"] == "add":
+                data = cmd["data"]
+                subtasks = data.get("subtasks", [])
+                formatted_subtasks = []
+                for subtask in subtasks:
+                    formatted_subtasks.append({
+                        "id": self.generate_id(),
+                        "content": subtask.get("content", ""),
+                        "completed": False
+                    })
+                self.schedules.append({
+                    "id": self.generate_id(), 
+                    "content": data["content"], 
+                    "time": data.get("time", time),
+                    "date": self.current_date.strftime("%Y-%m-%d"), 
+                    "completed": False, 
+                    "tag": data.get("tag", "normal"), 
+                    "subtasks": formatted_subtasks
+                })
+                Storage.save("schedules", self.schedules)
+                QMessageBox.information(self, "成功", "AI 创建日程完成！")
+                self.day_content.clear()
+                self.day_time.clear()
+                self.render_calendar()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", str(e))
+
+    def add_general_schedule(self):
+        content = self.general_content.text().strip()
+        time = self.general_time.text().strip()
+        if not content:
+            return
+        tag, ok = QInputDialog.getItem(self, "选择标签", "标签：", ["一般", "重要", "紧急", "重要且紧急"], 0, False)
+        if not ok:
+            tag = "一般"
+        tag_map = {"一般": "normal", "重要": "important", "紧急": "urgent", "重要且紧急": "important_urgent"}
+        
+        # 添加子任务
+        subtasks = []
+        while True:
+            subtask_content, ok = QInputDialog.getText(self, "添加子任务", "子任务内容（留空结束）：")
+            if not ok or not subtask_content:
+                break
+            subtasks.append({
+                "id": self.generate_id(),
+                "content": subtask_content,
+                "completed": False
+            })
+        
+        self.general_schedules.append({
+            "id": self.generate_id(), "content": content, "time": time, "tag": tag_map[tag], "subtasks": subtasks
+        })
+        Storage.save("general", self.general_schedules)
+        self.general_content.clear()
+        self.general_time.clear()
+        self.render_calendar()
+
+    def add_general_schedule_with_ai(self):
+        content = self.general_content.text().strip()
+        time = self.general_time.text().strip()
+        if not content:
+            return
+        
+        api_key = self.api_key.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "提示", "请先在设置中填写 API Key")
+            return
+        
+        try:
+            cmd = AIClient.run_command(api_key, self.model_select.currentText(), content)
+            if cmd["type"] == "add":
+                data = cmd["data"]
+                subtasks = data.get("subtasks", [])
+                formatted_subtasks = []
+                for subtask in subtasks:
+                    formatted_subtasks.append({
+                        "id": self.generate_id(),
+                        "content": subtask.get("content", ""),
+                        "completed": False
+                    })
+                self.general_schedules.append({
+                    "id": self.generate_id(), 
+                    "content": data["content"], 
+                    "time": data.get("time", time), 
+                    "tag": data.get("tag", "normal"), 
+                    "subtasks": formatted_subtasks
+                })
+                Storage.save("general", self.general_schedules)
+                QMessageBox.information(self, "成功", "AI 创建长期日程完成！")
+                self.general_content.clear()
+                self.general_time.clear()
+                self.render_calendar()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", str(e))
+
+    def add_habit(self):
+        content, ok = QInputDialog.getText(self, "添加习惯", "内容：")
+        if not ok or not content:
+            return
+        time, ok = QInputDialog.getText(self, "时间", "如：08:00")
+        self.habits.append({"id": self.generate_id(), "content": content, "time": time or ""})
+        Storage.save("habits", self.habits)
+        self.render_calendar()
+
+    def import_data(self):
+        # 选择导入方式
+        options = ["从JSON导入", "从系统日历导入"]
+        if not self.system_calendar.calendar_available:
+            options = ["从JSON导入"]
+        
+        choice, ok = QInputDialog.getItem(self, "选择导入方式", "请选择导入方式：", options, 0, False)
+        if not ok:
+            return
+        
+        if choice == "从JSON导入":
+            text, ok = QInputDialog.getMultiLineText(self, "导入", "粘贴JSON数据：")
+            if not ok or not text:
+                return
+            try:
+                import json
+                data = json.loads(text)
+                # 确保导入的数据包含所有必要的字段
+                for item in data:
+                    if "id" not in item:
+                        item["id"] = self.generate_id()
+                    if "tag" not in item:
+                        item["tag"] = "normal"
+                    if "subtasks" not in item:
+                        item["subtasks"] = []
+                    if "completed" not in item:
+                        item["completed"] = False
+                    # 确保子任务也有必要的字段
+                    for subtask in item.get("subtasks", []):
+                        if "id" not in subtask:
+                            subtask["id"] = self.generate_id()
+                        if "completed" not in subtask:
+                            subtask["completed"] = False
+                self.schedules.extend(data)
+                Storage.save("schedules", self.schedules)
+                QMessageBox.information(self, "成功", "导入完成！")
+            except Exception as e:
+                QMessageBox.warning(self, "失败", f"JSON格式错误：{str(e)}")
+        elif choice == "从系统日历导入":
+            try:
+                events = self.system_calendar.import_events()
+                if events:
+                    # 确保导入的事件包含所有必要的字段
+                    for event in events:
+                        if "id" not in event:
+                            event["id"] = self.generate_id()
+                        if "tag" not in event:
+                            event["tag"] = "normal"
+                        if "subtasks" not in event:
+                            event["subtasks"] = []
+                        if "completed" not in event:
+                            event["completed"] = False
+                    self.schedules.extend(events)
+                    Storage.save("schedules", self.schedules)
+                    QMessageBox.information(self, "成功", f"从系统日历导入了 {len(events)} 个事件！")
+                else:
+                    QMessageBox.information(self, "提示", "系统日历中没有事件，或导入失败")
+            except Exception as e:
+                QMessageBox.warning(self, "失败", f"系统日历导入错误：{str(e)}")
+
+    def export_data(self):
+        # 选择导出方式
+        options = ["导出为JSON", "导出到系统日历"]
+        if not self.system_calendar.calendar_available:
+            options = ["导出为JSON"]
+        
+        choice, ok = QInputDialog.getItem(self, "选择导出方式", "请选择导出方式：", options, 0, False)
+        if not ok:
+            return
+        
+        if choice == "导出为JSON":
+            # 确保导出的数据包含所有必要的字段
+            export_data = []
+            for item in self.schedules:
+                export_item = {
+                    "id": item.get("id", ""),
+                    "content": item.get("content", ""),
+                    "time": item.get("time", ""),
+                    "date": item.get("date", ""),
+                    "completed": item.get("completed", False),
+                    "tag": item.get("tag", "normal"),
+                    "subtasks": item.get("subtasks", [])
+                }
+                export_data.append(export_item)
+            import json
+            text = json.dumps(export_data, ensure_ascii=False, indent=2)
+            file, _ = QFileDialog.getSaveFileName(self, "导出", f"日程_{datetime.now().strftime('%Y%m%d')}.json", "JSON Files (*.json)")
+            if file:
+                with open(file, "w", encoding="utf-8") as f:
+                    f.write(text)
+                QMessageBox.information(self, "成功", "导出完成！")
+        elif choice == "导出到系统日历":
+            try:
+                # 只导出未完成的事件
+                events_to_export = [s for s in self.schedules if not s.get("completed", False)]
+                if events_to_export:
+                    success = self.system_calendar.export_events(events_to_export)
+                    if success:
+                        QMessageBox.information(self, "成功", f"成功导出 {len(events_to_export)} 个事件到系统日历！")
+                    else:
+                        QMessageBox.warning(self, "失败", "导出到系统日历失败")
+                else:
+                    QMessageBox.information(self, "提示", "没有未完成的事件可导出")
+            except Exception as e:
+                QMessageBox.warning(self, "失败", f"系统日历导出错误：{str(e)}")
+
+    def open_recycle_bin(self):
+        if not self.recycle_bin:
+            QMessageBox.information(self, "回收站", "空")
+            return
+        
+        # 显示回收站内容和操作选项
+        options = ["查看所有", "恢复全部", "恢复单个", "清空"]
+        act, ok = QInputDialog.getItem(self, "回收站", f"回收站中有 {len(self.recycle_bin)} 个已删除日程", options, 0, False)
+        if not ok:
+            return
+        
+        if act == "查看所有":
+            # 格式化显示回收站内容
+            content = "\n".join([f"{i+1}. {item['time']} {item['content']} [标签: {item.get('tag', 'normal')}]" for i, item in enumerate(self.recycle_bin)])
+            QMessageBox.information(self, "回收站内容", content)
+        
+        elif act == "恢复全部":
+            if QMessageBox.question(self, "确认", "确定要恢复所有已删除的日程吗？") == QMessageBox.StandardButton.Yes:
+                self.schedules.extend(self.recycle_bin)
+                self.recycle_bin = []
+                Storage.save("schedules", self.schedules)
+                Storage.save("recycle_bin", self.recycle_bin)
+                QMessageBox.information(self, "成功", "所有日程已恢复")
+                self.render_calendar()
+        
+        elif act == "恢复单个":
+            # 让用户选择要恢复的日程
+            recycle_list = [f"{i+1}. {item['time']} {item['content']} [标签: {item.get('tag', 'normal')}]" for i, item in enumerate(self.recycle_bin)]
+            selected, ok = QInputDialog.getItem(self, "恢复单个日程", "选择要恢复的日程：", recycle_list, 0, False)
+            if ok:
+                selected_index = recycle_list.index(selected)
+                restored_item = self.recycle_bin.pop(selected_index)
+                self.schedules.append(restored_item)
+                Storage.save("schedules", self.schedules)
+                Storage.save("recycle_bin", self.recycle_bin)
+                QMessageBox.information(self, "成功", "日程已恢复")
+                self.render_calendar()
+        
+        elif act == "清空":
+            if QMessageBox.question(self, "确认", "确定要清空回收站吗？此操作不可恢复。") == QMessageBox.StandardButton.Yes:
+                self.recycle_bin = []
+                Storage.save("recycle_bin", self.recycle_bin)
+                QMessageBox.information(self, "成功", "回收站已清空")
+
+    def clear_all(self):
+        if QMessageBox.question(self, "确认", "清空所有日程？") == QMessageBox.StandardButton.Yes:
+            self.recycle_bin.extend(self.schedules)
+            self.schedules = []
+            Storage.save("schedules", self.schedules)
+            Storage.save("recycle_bin", self.recycle_bin)
+            self.render_calendar()
+
+    def edit_schedule(self):
+        # 显示所有日程供选择
+        schedule_list = [f"{s['time']} {s['content']} [标签: {s.get('tag', 'normal')}]" for s in self.schedules]
+        if not schedule_list:
+            QMessageBox.warning(self, "提示", "暂无日程可编辑")
+            return
+        
+        selected, ok = QInputDialog.getItem(self, "编辑日程", "选择要编辑的日程：", schedule_list, 0, False)
+        if not ok:
+            return
+        
+        # 找到选中的日程
+        selected_index = schedule_list.index(selected)
+        schedule = self.schedules[selected_index]
+        self.edit_schedule_direct(schedule)
+
+    def edit_schedule_direct(self, schedule):
+        # 编辑内容
+        content, ok = QInputDialog.getText(self, "编辑日程", "内容：", text=schedule["content"])
+        if not ok:
+            return
+        
+        # 编辑时间
+        time, ok = QInputDialog.getText(self, "编辑时间", "时间（如：14:00）：", text=schedule["time"])
+        if not ok:
+            return
+        
+        # 编辑标签
+        tag_map = {"normal": "一般", "important": "重要", "urgent": "紧急", "important_urgent": "重要且紧急"}
+        current_tag = tag_map.get(schedule.get("tag", "normal"), "一般")
+        tag_options = ["一般", "重要", "紧急", "重要且紧急"]
+        current_tag_index = tag_options.index(current_tag)
+        tag, ok = QInputDialog.getItem(self, "选择标签", "标签：", tag_options, current_tag_index, False)
+        if not ok:
+            tag = current_tag
+        
+        # 编辑子任务
+        subtasks = schedule.get("subtasks", [])
+        new_subtasks = []
+        for i, subtask in enumerate(subtasks):
+            subtask_content, ok = QInputDialog.getText(self, "编辑子任务", f"子任务 {i+1}：", text=subtask["content"])
+            if ok and subtask_content:
+                new_subtasks.append({
+                    "id": subtask["id"],
+                    "content": subtask_content,
+                    "completed": subtask.get("completed", False)
+                })
+        
+        # 添加新子任务
+        while True:
+            subtask_content, ok = QInputDialog.getText(self, "添加子任务", "添加新子任务（留空结束）：")
+            if not ok or not subtask_content:
+                break
+            new_subtasks.append({
+                "id": self.generate_id(),
+                "content": subtask_content,
+                "completed": False
+            })
+        
+        # 询问是否删除
+        delete = QMessageBox.question(self, "删除日程", "是否删除此日程？", 
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if delete == QMessageBox.StandardButton.Yes:
+            self.recycle_bin.append(schedule)
+            self.schedules = [s for s in self.schedules if s["id"] != schedule["id"]]
+            Storage.save("schedules", self.schedules)
+            Storage.save("recycle_bin", self.recycle_bin)
+            self.render_calendar()
+            QMessageBox.information(self, "成功", "日程已删除！")
+            return
+        
+        # 更新日程
+        tag_map_reverse = {"一般": "normal", "重要": "important", "紧急": "urgent", "重要且紧急": "important_urgent"}
+        schedule["content"] = content
+        schedule["time"] = time
+        schedule["tag"] = tag_map_reverse[tag]
+        schedule["subtasks"] = new_subtasks
+        
+        Storage.save("schedules", self.schedules)
+        self.render_calendar()
+        QMessageBox.information(self, "成功", "日程编辑完成！")
+
+    def edit_general_schedule_direct(self, schedule):
+        # 编辑内容
+        content, ok = QInputDialog.getText(self, "编辑长期日程", "内容：", text=schedule["content"])
+        if not ok:
+            return
+        
+        # 编辑时间
+        time, ok = QInputDialog.getText(self, "编辑时间", "时间（如：14:00）：", text=schedule["time"])
+        if not ok:
+            return
+        
+        # 编辑标签
+        tag_map = {"normal": "一般", "important": "重要", "urgent": "紧急", "important_urgent": "重要且紧急"}
+        current_tag = tag_map.get(schedule.get("tag", "normal"), "一般")
+        tag_options = ["一般", "重要", "紧急", "重要且紧急"]
+        current_tag_index = tag_options.index(current_tag)
+        tag, ok = QInputDialog.getItem(self, "选择标签", "标签：", tag_options, current_tag_index, False)
+        if not ok:
+            tag = current_tag
+        
+        # 编辑子任务
+        subtasks = schedule.get("subtasks", [])
+        new_subtasks = []
+        for i, subtask in enumerate(subtasks):
+            subtask_content, ok = QInputDialog.getText(self, "编辑子任务", f"子任务 {i+1}：", text=subtask["content"])
+            if ok and subtask_content:
+                new_subtasks.append({
+                    "id": subtask["id"],
+                    "content": subtask_content,
+                    "completed": subtask.get("completed", False)
+                })
+        
+        # 添加新子任务
+        while True:
+            subtask_content, ok = QInputDialog.getText(self, "添加子任务", "添加新子任务（留空结束）：")
+            if not ok or not subtask_content:
+                break
+            new_subtasks.append({
+                "id": self.generate_id(),
+                "content": subtask_content,
+                "completed": False
+            })
+        
+        # 询问是否删除
+        delete = QMessageBox.question(self, "删除长期日程", "是否删除此长期日程？", 
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if delete == QMessageBox.StandardButton.Yes:
+            self.general_schedules = [s for s in self.general_schedules if s["id"] != schedule["id"]]
+            Storage.save("general", self.general_schedules)
+            self.render_calendar()
+            QMessageBox.information(self, "成功", "长期日程已删除！")
+            return
+        
+        # 更新长期日程
+        tag_map_reverse = {"一般": "normal", "重要": "important", "紧急": "urgent", "重要且紧急": "important_urgent"}
+        schedule["content"] = content
+        schedule["time"] = time
+        schedule["tag"] = tag_map_reverse[tag]
+        schedule["subtasks"] = new_subtasks
+        
+        Storage.save("general", self.general_schedules)
+        self.render_calendar()
+        QMessageBox.information(self, "成功", "长期日程编辑完成！")
+
+    # ===================== AI功能 =====================
+    def run_ai_command(self):
+        api_key = self.api_key.text().strip()
+        prompt = self.ai_input.text().strip()
+        if not api_key or not prompt:
+            QMessageBox.warning(self, "提示", "请填写API Key和指令")
+            return
+
+        try:
+            cmd = AIClient.run_command(api_key, self.model_select.currentText(), prompt)
+            self.execute_ai_command(cmd)
+            QMessageBox.information(self, "成功", "AI执行完成！")
+            self.ai_input.clear()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", str(e))
+
+    def execute_ai_command(self, cmd):
+        if cmd["type"] == "add":
+            data = cmd["data"]
+            subtasks = data.get("subtasks", [])
+            formatted_subtasks = []
+            for subtask in subtasks:
+                formatted_subtasks.append({
+                    "id": self.generate_id(),
+                    "content": subtask.get("content", ""),
+                    "completed": False
+                })
+            self.schedules.append({
+                "id": self.generate_id(), 
+                "content": data["content"], 
+                "time": data.get("time", ""),
+                "date": datetime.now().strftime("%Y-%m-%d"), 
+                "completed": False, 
+                "tag": data.get("tag", "normal"), 
+                "subtasks": formatted_subtasks
+            })
+        elif cmd["type"] == "delete":
+            if "id" in cmd:
+                self.recycle_bin.extend([s for s in self.schedules if s["id"] == cmd["id"]])
+                self.schedules = [s for s in self.schedules if s["id"] != cmd["id"]]
+            if "keyword" in cmd:
+                self.recycle_bin.extend([s for s in self.schedules if cmd["keyword"] in s["content"]])
+                self.schedules = [s for s in self.schedules if cmd["keyword"] not in s["content"]]
+        elif cmd["type"] == "complete":
+            if "id" in cmd:
+                for s in self.schedules:
+                    if s["id"] == cmd["id"]:
+                        s["completed"] = True
+            else:
+                for s in self.schedules:
+                    s["completed"] = True
+        elif cmd["type"] == "clear":
+            self.recycle_bin.extend(self.schedules)
+            self.schedules = []
+        Storage.save("schedules", self.schedules)
+        Storage.save("recycle_bin", self.recycle_bin)
+        self.render_calendar()
+
+    def get_ai_suggestion(self):
+        api_key = self.api_key.text().strip()
+        prompt = self.ai_suggest_input.text().strip()
+        if not api_key or not prompt:
+            QMessageBox.warning(self, "提示", "请填写API Key和需求")
+            return
+        try:
+            suggestion = AIClient.get_suggestion(api_key, self.model_select.currentText(), self.schedules, prompt)
+            QMessageBox.information(self, "AI建议", suggestion)
+            self.ai_suggest_input.clear()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", str(e))
+
+    # ===================== 拖拽功能 =====================
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton and self.drag_pos:
+            self.move(event.globalPosition().toPoint() - self.drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        self.drag_pos = None
+
+    # ===================== 设置面板 =====================
+    def toggle_settings_panel(self):
+        self.settings_panel.setVisible(not self.settings_panel.isVisible())
+    
+    # ===================== 长按事件处理 =====================
+    def on_schedule_long_press(self, schedule):
+        # 长按事件处理：显示日程详情和快捷操作
+        tag_map = {"normal": "一般", "important": "重要", "urgent": "紧急", "important_urgent": "重要且紧急"}
+        tag_text = tag_map.get(schedule.get("tag", "normal"), "一般")
+        
+        # 构建详情文本
+        details = f"内容: {schedule['content']}\n"
+        details += f"时间: {schedule['time']}\n"
+        details += f"日期: {schedule['date']}\n"
+        details += f"标签: {tag_text}\n"
+        details += f"状态: {'已完成' if schedule['completed'] else '未完成'}\n"
+        
+        # 添加子任务信息
+        subtasks = schedule.get("subtasks", [])
+        if subtasks:
+            details += "\n子任务:\n"
+            for i, subtask in enumerate(subtasks):
+                details += f"  {i+1}. {'✅' if subtask.get('completed', False) else '◽'} {subtask['content']}\n"
+        
+        # 显示详情对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("日程详情")
+        dialog.setMinimumWidth(300)
+        
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(details))
+        
+        # 添加快捷操作按钮
+        btn_layout = QHBoxLayout()
+        toggle_btn = QPushButton("切换完成状态")
+        delete_btn = QPushButton("删除")
+        cancel_btn = QPushButton("取消")
+        
+        def toggle_completed():
+            schedule["completed"] = not schedule["completed"]
+            Storage.save("schedules", self.schedules)
+            self.render_calendar()
+            dialog.accept()
+        
+        def delete_schedule():
+            if QMessageBox.question(self, "确认删除", "确定要删除此日程吗？", 
+                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                self.recycle_bin.append(schedule)
+                self.schedules = [s for s in self.schedules if s["id"] != schedule["id"]]
+                Storage.save("schedules", self.schedules)
+                Storage.save("recycle_bin", self.recycle_bin)
+                self.render_calendar()
+                dialog.accept()
+        
+        toggle_btn.clicked.connect(toggle_completed)
+        delete_btn.clicked.connect(delete_schedule)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        btn_layout.addWidget(toggle_btn)
+        btn_layout.addWidget(delete_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec()
+    
+    def on_general_schedule_long_press(self, schedule):
+        # 长按事件处理：显示长期日程详情和快捷操作
+        tag_map = {"normal": "一般", "important": "重要", "urgent": "紧急", "important_urgent": "重要且紧急"}
+        tag_text = tag_map.get(schedule.get("tag", "normal"), "一般")
+        
+        # 构建详情文本
+        details = f"内容: {schedule['content']}\n"
+        details += f"时间: {schedule['time']}\n"
+        details += f"标签: {tag_text}\n"
+        
+        # 添加子任务信息
+        subtasks = schedule.get("subtasks", [])
+        if subtasks:
+            details += "\n子任务:\n"
+            for i, subtask in enumerate(subtasks):
+                details += f"  {i+1}. {'✅' if subtask.get('completed', False) else '◽'} {subtask['content']}\n"
+        
+        # 显示详情对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("长期日程详情")
+        dialog.setMinimumWidth(300)
+        
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(details))
+        
+        # 添加快捷操作按钮
+        btn_layout = QHBoxLayout()
+        delete_btn = QPushButton("删除")
+        cancel_btn = QPushButton("取消")
+        
+        def delete_schedule():
+            if QMessageBox.question(self, "确认删除", "确定要删除此长期日程吗？", 
+                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                self.general_schedules = [s for s in self.general_schedules if s["id"] != schedule["id"]]
+                Storage.save("general", self.general_schedules)
+                self.render_calendar()
+                dialog.accept()
+        
+        delete_btn.clicked.connect(delete_schedule)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        btn_layout.addWidget(delete_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec()
+    
+    # ===================== 样式管理 =====================
+    def load_preset_style(self, preset_name):
+        """加载预设样式"""
+        if preset_name in PRESET_STYLES:
+            self.current_style = PRESET_STYLES[preset_name].copy()
+            self.update_style_controls()
+            self.apply_style()
+            self.render_calendar()
+    
+    def show_color_dialog(self, color_key):
+        """显示颜色选择对话框"""
+        color = QColorDialog.getColor(QColor(self.current_style['colors'][color_key]), self, f"选择{color_key}颜色")
+        if color.isValid():
+            self.current_style['colors'][color_key] = color.name()
+            self.color_pickers[color_key].setStyleSheet(f"background:{color.name()};")
+            self.apply_style()
+            self.render_calendar()
+    
+    def update_font_family(self, family):
+        """更新字体家族"""
+        self.current_style['fonts']['family'] = family
+        self.apply_style()
+        self.render_calendar()
+    
+    def update_font_size(self, size):
+        """更新字体大小"""
+        self.current_style['fonts']['size']['normal'] = size
+        # 调整其他字体大小比例
+        self.current_style['fonts']['size']['small'] = int(size * 0.8)
+        self.current_style['fonts']['size']['medium'] = int(size * 1.2)
+        self.current_style['fonts']['size']['large'] = int(size * 1.4)
+        self.current_style['fonts']['size']['xlarge'] = int(size * 1.6)
+        self.apply_style()
+        self.render_calendar()
+    
+    def update_card_radius(self, radius):
+        """更新卡片圆角"""
+        self.current_style['sizes']['card_radius'] = radius
+        self.apply_style()
+        self.render_calendar()
+    
+    def update_button_radius(self, radius):
+        """更新按钮圆角"""
+        self.current_style['sizes']['button_radius'] = radius
+        self.apply_style()
+        self.render_calendar()
+    
+    def update_padding(self, padding):
+        """更新内边距"""
+        self.current_style['sizes']['padding'] = padding
+        self.apply_style()
+        self.render_calendar()
+    
+    def update_style_controls(self):
+        """更新样式控制面板的值"""
+        # 更新颜色选择器
+        for key, picker in self.color_pickers.items():
+            picker.setStyleSheet(f"background:{self.current_style['colors'][key]};")
+        
+        # 更新字体设置
+        self.font_family.setCurrentText(self.current_style['fonts']['family'])
+        self.font_size.setValue(self.current_style['fonts']['size']['normal'])
+        
+        # 更新大小设置
+        self.card_radius.setValue(self.current_style['sizes']['card_radius'])
+        self.button_radius.setValue(self.current_style['sizes']['button_radius'])
+        self.padding.setValue(self.current_style['sizes']['padding'])
+    
+    def save_style(self):
+        """保存样式配置"""
+        Storage.save("style", self.current_style)
+        QMessageBox.information(self, "成功", "样式已保存！")
+    
+    def closeEvent(self, event):
+        """窗口关闭事件，清理资源"""
+        try:
+            widget_manager.cleanup_all()
+        except:
+            pass
+        event.accept()
