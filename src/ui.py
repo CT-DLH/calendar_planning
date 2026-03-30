@@ -182,14 +182,17 @@ class AIChatWidget(QWidget):
                 
                 cmd = AIClient.run_command(api_key, self.parent_window.model_select.currentText(), full_prompt)
                 if cmd["type"] == "add":
-                    self.parent_window.execute_ai_command(cmd)
+                    self.parent_window.execute_ai_command(cmd, content)
                     self.add_message("✅ 日程操作已完成！", "ai")
                 elif cmd["type"] == "delete":
-                    self.parent_window.execute_ai_command(cmd)
+                    self.parent_window.execute_ai_command(cmd, content)
                     self.add_message("✅ 日程已删除！", "ai")
                 elif cmd["type"] == "complete":
-                    self.parent_window.execute_ai_command(cmd)
+                    self.parent_window.execute_ai_command(cmd, content)
                     self.add_message("✅ 日程已标记完成！", "ai")
+                elif cmd["type"] == "clear":
+                    self.parent_window.execute_ai_command(cmd, content)
+                    self.add_message("✅ 所有日程已清空！", "ai")
                 else:
                     self.add_message("已收到您的指令。", "ai")
             else:
@@ -258,142 +261,13 @@ class AIChatWidget(QWidget):
             QCheckBox { color:#e5e7eb; }
             QScrollArea { border:none; }
         """)
-
-
-class QuickAddScheduleDialog(QDialog):
-    def __init__(self, parent=None, default_date=None):
-        super().__init__(parent)
-        self.default_date = default_date
-        self.setWindowTitle("添加日程")
-        self.setMinimumWidth(500)
-        self.result_data = None
-        self.init_ui()
-        self.apply_dark_style()
-    
-    def init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(15)
-        layout.setContentsMargins(20, 20, 20, 20)
-        
-        title = QLabel("📝 一句话添加日程")
-        title.setStyleSheet("font-size:18px;font-weight:bold;")
-        layout.addWidget(title)
-        
-        form_layout = QFormLayout()
-        form_layout.setSpacing(12)
-        
-        self.content_edit = QLineEdit()
-        self.content_edit.setPlaceholderText("输入日程内容，如：明天下午3点开会")
-        self.content_edit.returnPressed.connect(self.use_ai)
-        form_layout.addRow("内容：", self.content_edit)
-        
-        date_layout = QHBoxLayout()
-        date_label = QLabel("日期：")
-        self.date_edit = QDateEdit()
-        self.date_edit.setCalendarPopup(True)
-        self.date_edit.setDisplayFormat("yyyy-MM-dd")
-        self.date_edit.setStyleSheet("min-width:150px;")
-        if self.default_date:
-            self.date_edit.setDate(QDate.fromString(self.default_date, "yyyy-MM-dd"))
-        else:
-            self.date_edit.setDate(QDate.currentDate())
-        
-        todo_label = QLabel("（不填则归档到待办日程）")
-        todo_label.setStyleSheet("font-size:12px;color:#9ca3af;")
-        
-        date_layout.addWidget(date_label)
-        date_layout.addWidget(self.date_edit)
-        date_layout.addWidget(todo_label)
-        date_layout.addStretch()
-        form_layout.addRow("", date_layout)
-        
-        layout.addLayout(form_layout)
-        
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        
-        ai_btn = QPushButton("🤖 AI 创建")
-        ai_btn.clicked.connect(self.use_ai)
-        ai_btn.setObjectName("purple")
-        
-        cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        
-        ok_btn = QPushButton("确定")
-        ok_btn.clicked.connect(self.accept)
-        ok_btn.setObjectName("blue")
-        
-        btn_layout.addWidget(ai_btn)
-        btn_layout.addWidget(cancel_btn)
-        btn_layout.addWidget(ok_btn)
-        layout.addLayout(btn_layout)
-        
-        self.content_edit.setFocus()
-    
-    def use_ai(self):
-        content = self.content_edit.text().strip()
-        if not content:
-            QMessageBox.warning(self, "提示", "请输入日程内容")
-            return
-        
-        api_key = self.parent().api_key.text().strip()
-        if not api_key:
-            QMessageBox.warning(self, "提示", "请先在设置中填写 API Key")
-            return
-        
-        try:
-            cmd = AIClient.run_command(api_key, self.parent().model_select.currentText(), content)
-            if cmd["type"] == "add":
-                self.result_data = cmd["data"]
-                self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "失败", str(e))
-    
-    def get_data(self):
-        content = self.content_edit.text().strip()
-        date_str = self.date_edit.date().toString("yyyy-MM-dd")
-        
-        if self.result_data:
-            data = self.result_data
-            data["date"] = date_str
-            return data
-        else:
-            return {
-                "content": content,
-                "date": date_str,
-                "time": "",
-                "start_time": "",
-                "end_time": "",
-                "tag": "normal",
-                "subtasks": []
-            }
-    
-    def apply_dark_style(self):
-        self.setStyleSheet("""
-            QDialog { background:#111827; }
-            QLabel { color:#e5e7eb; }
-            QLineEdit, QDateEdit {
-                background:#1f2937; border:1px solid #374151; border-radius:6px;
-                padding:8px; color:#e5e7eb;
-            }
-            QPushButton {
-                background:#374151; border:1px solid #4b5563; border-radius:6px;
-                padding:8px 16px; color:#e5e7eb;
-            }
-            QPushButton:hover { background:#4b5563; }
-            QPushButton#blue { background:#3b82f6; color:white; }
-            QPushButton#blue:hover { background:#2563eb; }
-            QPushButton#purple { background:#8b5cf6; color:white; }
-            QPushButton#purple:hover { background:#7c3aed; }
-        """)
-
-
 class ScheduleDialog(QDialog):
-    def __init__(self, parent=None, schedule=None, is_todo=False, is_edit=False):
+    def __init__(self, parent=None, schedule=None, is_todo=False, is_edit=False, default_date=None):
         super().__init__(parent)
         self.schedule = schedule
         self.is_todo = is_todo
         self.is_edit = is_edit
+        self.default_date = default_date
         self.setWindowTitle("编辑日程" if is_edit else "添加日程")
         self.setMinimumWidth(450)
         self.init_ui()
@@ -418,6 +292,32 @@ class ScheduleDialog(QDialog):
         if self.schedule and self.schedule.get("content", ""):
             self.content_edit.setText(self.schedule["content"])
         form_layout.addRow("内容：", self.content_edit)
+        
+        self.date_checkbox = QCheckBox("设置日期")
+        self.date_checkbox.setChecked(True)
+        self.date_checkbox.stateChanged.connect(self.on_date_checkbox_changed)
+        
+        self.date_edit = QDateEdit()
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.date_edit.setStyleSheet("min-width:150px;")
+        if self.schedule and self.schedule.get("date", ""):
+            self.date_edit.setDate(QDate.fromString(self.schedule["date"], "yyyy-MM-dd"))
+            self.date_checkbox.setChecked(True)
+        elif self.schedule and not self.schedule.get("date", ""):
+            self.date_edit.setDate(QDate.currentDate())
+            self.date_checkbox.setChecked(False)
+        elif self.default_date:
+            self.date_edit.setDate(QDate.fromString(self.default_date, "yyyy-MM-dd"))
+            self.date_checkbox.setChecked(True)
+        else:
+            self.date_edit.setDate(QDate.currentDate())
+            self.date_checkbox.setChecked(True)
+        
+        self.date_edit.setEnabled(self.date_checkbox.isChecked())
+        
+        form_layout.addRow(self.date_checkbox)
+        form_layout.addRow("日期：", self.date_edit)
         
         self.time_edit = QLineEdit()
         self.time_edit.setPlaceholderText("时间描述（可选，如：下午3点）")
@@ -500,7 +400,7 @@ class ScheduleDialog(QDialog):
         self.setStyleSheet("""
             QDialog { background:#111827; }
             QLabel { color:#e5e7eb; }
-            QLineEdit, QComboBox, QListWidget {
+            QLineEdit, QComboBox, QListWidget, QDateEdit {
                 background:#1f2937; border:1px solid #374151;
                 border-radius:6px; padding:8px; color:#e5e7eb;
             }
@@ -519,6 +419,9 @@ class ScheduleDialog(QDialog):
             }
             QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 5px; }
         """)
+    
+    def on_date_checkbox_changed(self):
+        self.date_edit.setEnabled(self.date_checkbox.isChecked())
     
     def add_subtask(self):
         content = self.subtask_edit.text().strip()
@@ -546,13 +449,16 @@ class ScheduleDialog(QDialog):
         
         tag_reverse = {"一般": "normal", "重要": "important", "紧急": "urgent", "重要且紧急": "important_urgent"}
         
+        date_value = self.date_edit.date().toString("yyyy-MM-dd") if self.date_checkbox.isChecked() else ""
+        
         return {
             "content": self.content_edit.text().strip(),
             "time": self.time_edit.text().strip(),
             "start_time": self.start_time_edit.text().strip(),
             "end_time": self.end_time_edit.text().strip(),
             "tag": tag_reverse[self.tag_combo.currentText()],
-            "subtasks": subtasks
+            "subtasks": subtasks,
+            "date": date_value
         }
 
 class ScheduleButton(QPushButton):
@@ -657,6 +563,13 @@ class TodoScheduleBox(QGroupBox):
                 event.accept()
                 return
         super().mousePressEvent(event)
+    
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.parent_window.edit_todo_schedule_direct(self.schedule)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 class ScheduleWindow(QMainWindow):
     def __init__(self):
@@ -913,12 +826,10 @@ class ScheduleWindow(QMainWindow):
         self.bottom_widget.setStyleSheet("padding:8px;border-top:1px solid #374151;")
         bottom_layout = QHBoxLayout(self.bottom_widget)
         self.add_btn = QPushButton("+ 添加日程")
-        self.habit_btn = QPushButton("+ 添加习惯")
         self.import_btn = QPushButton("导入")
         self.export_btn = QPushButton("导出")
         self.bin_btn = QPushButton("回收站")
-        self.clear_btn = QPushButton("清空所有")
-        for btn in [self.add_btn, self.habit_btn, self.import_btn, self.export_btn, self.bin_btn, self.clear_btn]:
+        for btn in [self.add_btn, self.import_btn, self.export_btn, self.bin_btn]:
             bottom_layout.addWidget(btn)
         schedule_layout.addWidget(self.bottom_widget)
 
@@ -992,7 +903,6 @@ class ScheduleWindow(QMainWindow):
         self.bottom_widget.setStyleSheet(f"padding:{sizes['padding']}px;border-top:1px solid {colors['border']};")
         
         # 按钮颜色标记
-        self.clear_btn.setObjectName("red")
         self.export_btn.setObjectName("yellow")
         self.import_btn.setObjectName("purple")
 
@@ -1012,11 +922,9 @@ class ScheduleWindow(QMainWindow):
         self.next_btn.clicked.connect(self.next_period)
         # 功能按钮
         self.add_btn.clicked.connect(self.add_schedule)
-        self.habit_btn.clicked.connect(self.add_habit)
         self.import_btn.clicked.connect(self.import_data)
         self.export_btn.clicked.connect(self.export_data)
         self.bin_btn.clicked.connect(self.open_recycle_bin)
-        self.clear_btn.clicked.connect(self.clear_all)
 
     # ===================== 视图切换 =====================
     def switch_view(self, view):
@@ -1529,16 +1437,15 @@ class ScheduleWindow(QMainWindow):
         else:
             for g in self.todo_schedules:
                 box = TodoScheduleBox(g, self)
-                box.clicked.connect(lambda checked, g=g: self.edit_todo_schedule_direct(g))
                 self.schedule_list_layout.addWidget(box)
 
-        # 添加待办日程（一句话新建，集成 AI 功能）
+        # 添加待办日程
         add_layout = QVBoxLayout()
         
         # 内容输入框
         content_layout = QHBoxLayout()
         self.todo_content = QLineEdit()
-        self.todo_content.setPlaceholderText("一句话新建待办日程（如：完成作业），按下 Enter 键使用 AI 创建")
+        self.todo_content.setPlaceholderText("一句话新建待办日程（如：完成作业）")
         add_todo_btn = QPushButton("➕ 添加")
         add_todo_btn.setFixedWidth(80)
         add_todo_btn.clicked.connect(self.add_todo_schedule)
@@ -1548,7 +1455,7 @@ class ScheduleWindow(QMainWindow):
         add_layout.addLayout(content_layout)
         
         self.schedule_list_layout.addLayout(add_layout)
-        self.todo_content.returnPressed.connect(self.add_todo_schedule_with_ai)
+        self.todo_content.returnPressed.connect(self.add_todo_schedule)
 
     # ===================== 日程排序 =====================
     def sort_schedules(self, schedules):
@@ -1587,66 +1494,68 @@ class ScheduleWindow(QMainWindow):
         return str(int(datetime.now().timestamp())) + str(os.urandom(2).hex())
 
     def add_schedule(self):
-        dialog = ScheduleDialog(self)
+        dialog = ScheduleDialog(self, default_date=datetime.now().strftime("%Y-%m-%d"))
         result = dialog.exec()
         if result == QDialog.DialogCode.Accepted:
             data = dialog.get_data()
             current_time = datetime.now().timestamp()
-            self.schedules.append({
-                "id": self.generate_id(),
-                "content": data["content"],
-                "time": data["time"],
-                "start_time": data["start_time"],
-                "end_time": data["end_time"],
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "completed": False,
-                "tag": data["tag"],
-                "subtasks": data["subtasks"],
-                "created_at": current_time
-            })
-            Storage.save("schedules", self.schedules)
+            
+            selected_date = data.get("date", "")
+            
+            if selected_date and selected_date.strip():
+                self.schedules.append({
+                    "id": self.generate_id(),
+                    "content": data["content"],
+                    "time": data["time"],
+                    "start_time": data["start_time"],
+                    "end_time": data["end_time"],
+                    "date": selected_date,
+                    "completed": False,
+                    "tag": data["tag"],
+                    "subtasks": data["subtasks"],
+                    "created_at": current_time
+                })
+                Storage.save("schedules", self.schedules)
+            else:
+                self.todo_schedules.append({
+                    "id": self.generate_id(),
+                    "content": data["content"],
+                    "time": data["time"],
+                    "start_time": data["start_time"],
+                    "end_time": data["end_time"],
+                    "completed": False,
+                    "tag": data["tag"],
+                    "subtasks": data["subtasks"],
+                    "created_at": current_time
+                })
+                Storage.save("todo", self.todo_schedules)
+            
             self.render_calendar()
 
     def add_day_schedule(self):
         day_str = self.current_date.strftime("%Y-%m-%d")
-        dialog = QuickAddScheduleDialog(self, default_date=day_str)
+        dialog = ScheduleDialog(self, default_date=day_str)
         result = dialog.exec()
         if result == QDialog.DialogCode.Accepted:
             data = dialog.get_data()
             current_time = datetime.now().timestamp()
             
-            # 获取日期
+            # 从对话框获取日期
             selected_date = data.get("date", "")
-            
-            # 尝试解析时间
-            content = data.get("content", "")
-            parse_result = TimeParser.parse(content)
-            parsed_start_time = parse_result['start_time']
-            parsed_end_time = parse_result['end_time']
-            cleaned_content = parse_result['remaining_text'].strip()
-            parsed_date = parse_result['date']
-            
-            # 如果解析到了日期，使用解析的日期
-            if parsed_date:
-                selected_date = parsed_date
-            
-            # 优先使用解析到的时间
-            final_start_time = parsed_start_time if parsed_start_time else data.get("start_time", "")
-            final_end_time = parsed_end_time if parsed_end_time else data.get("end_time", "")
             
             # 检查是否有日期，没有则归档到待办日程
             if selected_date and selected_date.strip():
                 # 有日期，添加到日程
                 self.schedules.append({
                     "id": self.generate_id(),
-                    "content": cleaned_content if cleaned_content else content,
-                    "time": data.get("time", ""),
-                    "start_time": final_start_time,
-                    "end_time": final_end_time,
+                    "content": data["content"],
+                    "time": data["time"],
+                    "start_time": data["start_time"],
+                    "end_time": data["end_time"],
                     "date": selected_date,
                     "completed": False,
-                    "tag": data.get("tag", "normal"),
-                    "subtasks": data.get("subtasks", []),
+                    "tag": data["tag"],
+                    "subtasks": data["subtasks"],
                     "created_at": current_time
                 })
                 Storage.save("schedules", self.schedules)
@@ -1654,13 +1563,13 @@ class ScheduleWindow(QMainWindow):
                 # 没有日期，归档到待办日程
                 self.todo_schedules.append({
                     "id": self.generate_id(),
-                    "content": cleaned_content if cleaned_content else content,
-                    "time": data.get("time", ""),
-                    "start_time": final_start_time,
-                    "end_time": final_end_time,
+                    "content": data["content"],
+                    "time": data["time"],
+                    "start_time": data["start_time"],
+                    "end_time": data["end_time"],
                     "completed": False,
-                    "tag": data.get("tag", "normal"),
-                    "subtasks": data.get("subtasks", []),
+                    "tag": data["tag"],
+                    "subtasks": data["subtasks"],
                     "created_at": current_time
                 })
                 Storage.save("todo", self.todo_schedules)
@@ -1707,58 +1616,7 @@ class ScheduleWindow(QMainWindow):
             self.todo_content.clear()
             self.render_calendar()
 
-    def add_todo_schedule_with_ai(self):
-        content = self.todo_content.text().strip()
-        if not content:
-            return
-        
-        # 先尝试解析时间
-        parse_result = TimeParser.parse(content)
-        parsed_start_time = parse_result['start_time']
-        parsed_end_time = parse_result['end_time']
-        cleaned_content = parse_result['remaining_text'].strip()
-        
-        api_key = self.api_key.text().strip()
-        if not api_key:
-            QMessageBox.warning(self, "提示", "请先在设置中填写 API Key")
-            return
-        
-        try:
-            cmd = AIClient.run_command(api_key, self.model_select.currentText(), content)
-            if cmd["type"] == "add":
-                data = cmd["data"]
-                subtasks = data.get("subtasks", [])
-                formatted_subtasks = []
-                for subtask in subtasks:
-                    formatted_subtasks.append({
-                        "id": self.generate_id(),
-                        "content": subtask.get("content", ""),
-                        "completed": False
-                    })
-                
-                # 优先使用解析到的时间
-                final_start_time = parsed_start_time if parsed_start_time else data.get("start_time", "")
-                final_end_time = parsed_end_time if parsed_end_time else data.get("end_time", "")
-                final_time = data.get("time", "")
-                
-                current_time = datetime.now().timestamp()
-                self.todo_schedules.append({
-                    "id": self.generate_id(), 
-                    "content": cleaned_content if cleaned_content else data["content"], 
-                    "time": final_time, 
-                    "start_time": final_start_time,
-                    "end_time": final_end_time,
-                    "tag": data.get("tag", "normal"), 
-                    "subtasks": formatted_subtasks,
-                    "completed": False,
-                    "created_at": current_time
-                })
-                Storage.save("todo", self.todo_schedules)
-                QMessageBox.information(self, "成功", "AI 创建待办日程完成！")
-                self.todo_content.clear()
-                self.render_calendar()
-        except Exception as e:
-            QMessageBox.critical(self, "失败", str(e))
+
 
     def add_habit(self):
         content, ok = QInputDialog.getText(self, "添加习惯", "内容：")
@@ -1961,6 +1819,110 @@ class ScheduleWindow(QMainWindow):
             Storage.save("recycle_bin", self.recycle_bin)
             self.render_calendar()
 
+    def execute_ai_command(self, cmd, user_prompt=None):
+        """执行 AI 返回的命令"""
+        try:
+            if cmd["type"] == "add":
+                data = cmd["data"]
+                current_time = datetime.now().timestamp()
+                
+                # 使用用户原始输入进行日期和时间解析
+                parse_text = user_prompt if user_prompt else data.get("content", "")
+                parse_result = TimeParser.parse(parse_text)
+                parsed_start_time = parse_result['start_time']
+                parsed_end_time = parse_result['end_time']
+                parsed_date = parse_result['date']
+                
+                # 解析内容部分（优先使用 AI 返回的 content）
+                content = data.get("content", "")
+                content_parse_result = TimeParser.parse(content)
+                cleaned_content = content_parse_result['remaining_text'].strip()
+                
+                # 优先使用解析到的日期和时间
+                final_date = parsed_date
+                final_start_time = parsed_start_time if parsed_start_time else data.get("start_time", "")
+                final_end_time = parsed_end_time if parsed_end_time else data.get("end_time", "")
+                
+                # 处理子任务
+                subtasks = data.get("subtasks", [])
+                formatted_subtasks = []
+                for subtask in subtasks:
+                    formatted_subtasks.append({
+                        "id": self.generate_id(),
+                        "content": subtask.get("content", ""),
+                        "completed": False
+                    })
+                
+                # 检查是否有日期，没有则归档到待办日程
+                if final_date and final_date.strip():
+                    # 有日期，添加到日程
+                    self.schedules.append({
+                        "id": self.generate_id(),
+                        "content": cleaned_content if cleaned_content else content,
+                        "time": data.get("time", ""),
+                        "start_time": final_start_time,
+                        "end_time": final_end_time,
+                        "date": final_date,
+                        "completed": False,
+                        "tag": data.get("tag", "normal"),
+                        "subtasks": formatted_subtasks,
+                        "created_at": current_time
+                    })
+                    Storage.save("schedules", self.schedules)
+                else:
+                    # 没有日期，归档到待办日程
+                    self.todo_schedules.append({
+                        "id": self.generate_id(),
+                        "content": cleaned_content if cleaned_content else content,
+                        "time": data.get("time", ""),
+                        "start_time": final_start_time,
+                        "end_time": final_end_time,
+                        "completed": False,
+                        "tag": data.get("tag", "normal"),
+                        "subtasks": formatted_subtasks,
+                        "created_at": current_time
+                    })
+                    Storage.save("todo", self.todo_schedules)
+            
+            elif cmd["type"] == "delete":
+                if "id" in cmd:
+                    # 按 ID 删除
+                    self.recycle_bin.extend([s for s in self.schedules if s["id"] == cmd["id"]])
+                    self.schedules = [s for s in self.schedules if s["id"] != cmd["id"]]
+                elif "keyword" in cmd:
+                    # 按关键词删除
+                    self.recycle_bin.extend([s for s in self.schedules if cmd["keyword"] in s["content"]])
+                    self.schedules = [s for s in self.schedules if cmd["keyword"] not in s["content"]]
+                Storage.save("schedules", self.schedules)
+                Storage.save("recycle_bin", self.recycle_bin)
+            
+            elif cmd["type"] == "complete":
+                if "id" in cmd:
+                    # 按 ID 标记完成
+                    for s in self.schedules:
+                        if s["id"] == cmd["id"]:
+                            s["completed"] = True
+                else:
+                    # 标记所有完成
+                    for s in self.schedules:
+                        s["completed"] = True
+                Storage.save("schedules", self.schedules)
+            
+            elif cmd["type"] == "clear":
+                # 清空所有日程
+                self.recycle_bin.extend(self.schedules)
+                self.schedules = []
+                Storage.save("schedules", self.schedules)
+                Storage.save("recycle_bin", self.recycle_bin)
+            
+            # 重新渲染日历
+            self.render_calendar()
+            
+        except Exception as e:
+            print(f"Error executing AI command: {e}")
+            import traceback
+            traceback.print_exc()
+
     def edit_schedule(self):
         # 显示所有日程供选择
         def get_display_time(item):
@@ -2020,14 +1982,24 @@ class ScheduleWindow(QMainWindow):
             return
         elif result == QDialog.DialogCode.Accepted:
             data = dialog.get_data()
+            new_date = data.get("date", "")
+            
             schedule["content"] = data["content"]
             schedule["time"] = data["time"]
             schedule["start_time"] = data["start_time"]
             schedule["end_time"] = data["end_time"]
             schedule["tag"] = data["tag"]
             schedule["subtasks"] = data["subtasks"]
+            schedule["date"] = new_date
             
-            Storage.save("schedules", self.schedules)
+            if new_date and new_date.strip():
+                Storage.save("schedules", self.schedules)
+            else:
+                self.schedules = [s for s in self.schedules if s["id"] != schedule["id"]]
+                self.todo_schedules.append(schedule)
+                Storage.save("schedules", self.schedules)
+                Storage.save("todo", self.todo_schedules)
+            
             self.render_calendar()
             QMessageBox.information(self, "成功", "日程编辑完成！")
 
@@ -2043,105 +2015,26 @@ class ScheduleWindow(QMainWindow):
             return
         elif result == QDialog.DialogCode.Accepted:
             data = dialog.get_data()
+            new_date = data.get("date", "")
+            
             schedule["content"] = data["content"]
             schedule["time"] = data["time"]
             schedule["start_time"] = data["start_time"]
             schedule["end_time"] = data["end_time"]
             schedule["tag"] = data["tag"]
             schedule["subtasks"] = data["subtasks"]
+            schedule["date"] = new_date
             
-            Storage.save("todo", self.todo_schedules)
+            if new_date and new_date.strip():
+                self.todo_schedules = [s for s in self.todo_schedules if s["id"] != schedule["id"]]
+                self.schedules.append(schedule)
+                Storage.save("todo", self.todo_schedules)
+                Storage.save("schedules", self.schedules)
+            else:
+                Storage.save("todo", self.todo_schedules)
+            
             self.render_calendar()
             QMessageBox.information(self, "成功", "待办日程编辑完成！")
-
-    # ===================== AI功能 =====================
-    def run_ai_command(self):
-        api_key = self.api_key.text().strip()
-        prompt = self.ai_input.text().strip()
-        if not api_key or not prompt:
-            QMessageBox.warning(self, "提示", "请填写API Key和指令")
-            return
-
-        try:
-            cmd = AIClient.run_command(api_key, self.model_select.currentText(), prompt)
-            self.execute_ai_command(cmd)
-            QMessageBox.information(self, "成功", "AI执行完成！")
-            self.ai_input.clear()
-        except Exception as e:
-            QMessageBox.critical(self, "失败", str(e))
-
-    def execute_ai_command(self, cmd):
-        if cmd["type"] == "add":
-            data = cmd["data"]
-            
-            # 先尝试解析时间
-            content_text = data.get("content", "")
-            parse_result = TimeParser.parse(content_text)
-            parsed_date = parse_result['date']
-            parsed_start_time = parse_result['start_time']
-            parsed_end_time = parse_result['end_time']
-            cleaned_content = parse_result['remaining_text'].strip()
-            
-            subtasks = data.get("subtasks", [])
-            formatted_subtasks = []
-            for subtask in subtasks:
-                formatted_subtasks.append({
-                    "id": self.generate_id(),
-                    "content": subtask.get("content", ""),
-                    "completed": False
-                })
-            
-            # 优先使用解析到的日期和时间
-            final_date = parsed_date if parsed_date else datetime.now().strftime("%Y-%m-%d")
-            final_start_time = parsed_start_time if parsed_start_time else data.get("start_time", "")
-            final_end_time = parsed_end_time if parsed_end_time else data.get("end_time", "")
-            final_content = cleaned_content if cleaned_content else data["content"]
-            
-            self.schedules.append({
-                "id": self.generate_id(), 
-                "content": final_content, 
-                "time": data.get("time", ""),
-                "start_time": final_start_time,
-                "end_time": final_end_time,
-                "date": final_date, 
-                "completed": False, 
-                "tag": data.get("tag", "normal"), 
-                "subtasks": formatted_subtasks
-            })
-        elif cmd["type"] == "delete":
-            if "id" in cmd:
-                self.recycle_bin.extend([s for s in self.schedules if s["id"] == cmd["id"]])
-                self.schedules = [s for s in self.schedules if s["id"] != cmd["id"]]
-            if "keyword" in cmd:
-                self.recycle_bin.extend([s for s in self.schedules if cmd["keyword"] in s["content"]])
-                self.schedules = [s for s in self.schedules if cmd["keyword"] not in s["content"]]
-        elif cmd["type"] == "complete":
-            if "id" in cmd:
-                for s in self.schedules:
-                    if s["id"] == cmd["id"]:
-                        s["completed"] = True
-            else:
-                for s in self.schedules:
-                    s["completed"] = True
-        elif cmd["type"] == "clear":
-            self.recycle_bin.extend(self.schedules)
-            self.schedules = []
-        Storage.save("schedules", self.schedules)
-        Storage.save("recycle_bin", self.recycle_bin)
-        self.render_calendar()
-
-    def get_ai_suggestion(self):
-        api_key = self.api_key.text().strip()
-        prompt = self.ai_suggest_input.text().strip()
-        if not api_key or not prompt:
-            QMessageBox.warning(self, "提示", "请填写API Key和需求")
-            return
-        try:
-            suggestion = AIClient.get_suggestion(api_key, self.model_select.currentText(), self.schedules, prompt)
-            QMessageBox.information(self, "AI建议", suggestion)
-            self.ai_suggest_input.clear()
-        except Exception as e:
-            QMessageBox.critical(self, "失败", str(e))
 
     # ===================== 拖拽功能 =====================
     def mousePressEvent(self, event):
