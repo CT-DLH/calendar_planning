@@ -551,17 +551,105 @@ class ScheduleWindow(QMainWindow):
             self.week_bar.show()
             start = self.current_date - timedelta(days=self.current_date.weekday() + 1)
             
-            # 左侧：周视图日历（水平布局优化）
+            # 左侧：周视图日历（时间轴风格）
             
-            # 添加日期卡片
-            for i in range(7):
-                day = start + timedelta(days=i)
-                widget = self.create_day_card(day)
-                widget.setMinimumWidth(100)
-                widget.setMinimumHeight(150)
-                self.grid_layout.addWidget(widget, 0, i)
+            # 清空网格布局
+            for i in reversed(range(self.grid_layout.count())):
+                widget = self.grid_layout.itemAt(i).widget()
+                if widget:
+                    widget.deleteLater()
             
-            # 右侧：本周日程列表
+            # 时间轴标签
+            time_labels = ["8:00", "9:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00"]
+            
+            # 创建时间轴
+            time_widget = QWidget()
+            time_layout = QVBoxLayout(time_widget)
+            time_layout.setContentsMargins(10, 10, 10, 10)
+            time_layout.setSpacing(60)  # 每个小时的高度
+            
+            for time_label in time_labels:
+                label = QLabel(time_label)
+                label.setStyleSheet("font-size:12px;color:#9ca3af;")
+                time_layout.addWidget(label)
+            
+            self.grid_layout.addWidget(time_widget, 0, 0)
+            
+            # 为每天创建列
+            for day_idx in range(7):
+                day = start + timedelta(days=day_idx)
+                day_str = day.strftime("%Y-%m-%d")
+                
+                # 日期标题
+                day_widget = QWidget()
+                day_layout = QVBoxLayout(day_widget)
+                day_layout.setContentsMargins(10, 10, 10, 10)
+                
+                # 日期标题
+                day_title = QLabel(f"{day.day} {day.strftime('%a')}")
+                day_title.setStyleSheet("font-size:14px;font-weight:bold;margin-bottom:10px;")
+                day_layout.addWidget(day_title)
+                
+                # 时间轴容器
+                timeline_widget = QWidget()
+                timeline_layout = QVBoxLayout(timeline_widget)
+                timeline_layout.setContentsMargins(0, 0, 0, 0)
+                timeline_layout.setSpacing(0)
+                
+                # 创建时间段
+                for hour in range(8, 23):
+                    time_slot = QWidget()
+                    time_slot.setFixedHeight(60)  # 每个小时的高度
+                    time_slot_layout = QVBoxLayout(time_slot)
+                    time_slot_layout.setContentsMargins(0, 0, 0, 0)
+                    
+                    # 检查是否有该时间段的日程
+                    day_schedules = [s for s in self.schedules if s.get("date", "") == day_str and not (self.hide_completed and s.get("completed", False))]
+                    day_schedules = self.filter_schedules_by_tag(day_schedules)
+                    
+                    # 对日程进行排序
+                    day_schedules = self.sort_schedules(day_schedules)
+                    
+                    # 查找该小时的日程
+                    for s in day_schedules:
+                        start_time = s.get("start_time", "")
+                        if start_time:
+                            try:
+                                start_hour = int(start_time.split(":")[0])
+                                if start_hour == hour:
+                                    # 日程卡片
+                                    schedule_card = QWidget()
+                                    schedule_card.setStyleSheet("background:#1f2937;border-radius:6px;padding:6px;margin:2px 0;")
+                                    card_layout = QVBoxLayout(schedule_card)
+                                    card_layout.setContentsMargins(4, 4, 4, 4)
+                                    
+                                    # 时间标签（蓝色）
+                                    end_time = s.get("end_time", "")
+                                    time_text = f"{start_time}"
+                                    if end_time:
+                                        time_text += f" - {end_time}"
+                                    time_label = QLabel(time_text)
+                                    time_label.setStyleSheet("font-size:10px;color:#3b82f6;margin-bottom:2px;")
+                                    card_layout.addWidget(time_label)
+                                    
+                                    # 内容标签
+                                    content_label = QLabel(s.get("content", ""))
+                                    content_label.setStyleSheet("font-size:12px;color:white;")
+                                    card_layout.addWidget(content_label)
+                                    
+                                    # 添加点击事件
+                                    schedule_card.mousePressEvent = lambda event, s=s: self.edit_schedule_direct(s)
+                                    
+                                    time_slot_layout.addWidget(schedule_card)
+                            except:
+                                pass
+                    
+                    timeline_layout.addWidget(time_slot)
+                
+                day_layout.addWidget(timeline_widget)
+                self.grid_layout.addWidget(day_widget, 0, day_idx + 1)
+            
+            # 右侧：本周日程列表（保持原有功能）
             self.schedule_list_layout.addWidget(QLabel("📅 本周日程"))
             
             # 获取本周所有日程
@@ -779,9 +867,23 @@ class ScheduleWindow(QMainWindow):
                         display_time = f"{display_time}-{s['end_time']}"
                     elif not display_time:
                         display_time = s.get("time", "")
-                    time_label = QLabel(f"• {display_time}")
-                    time_label.setStyleSheet(f"font-size:{fonts['size']['small']}px;margin-top:2px;")
-                    lay.addWidget(time_label)
+                    
+                    # 创建日程项
+                    schedule_item = QWidget()
+                    schedule_layout = QVBoxLayout(schedule_item)
+                    schedule_layout.setContentsMargins(0, 2, 0, 2)
+                    
+                    # 时间标签（蓝色）
+                    time_label = QLabel(f"{display_time}")
+                    time_label.setStyleSheet(f"font-size:{fonts['size']['small']}px;color:#3b82f6;margin-bottom:2px;")
+                    schedule_layout.addWidget(time_label)
+                    
+                    # 内容标签
+                    content_label = QLabel(s.get("content", ""))
+                    content_label.setStyleSheet(f"font-size:{fonts['size']['small']}px;color:{colors['text']};")
+                    schedule_layout.addWidget(content_label)
+                    
+                    lay.addWidget(schedule_item)
                 if len(day_schedules) > 3:
                     more_label = QLabel(f"... 还有 {len(day_schedules) - 3} 个")
                     more_label.setStyleSheet(f"font-size:{fonts['size']['small']}px;color:{colors['text_secondary']};")
@@ -815,6 +917,9 @@ class ScheduleWindow(QMainWindow):
             if "subtasks" not in g:
                 g["subtasks"] = []
         
+        # 对待办日程进行排序
+        sorted_schedules = self.sort_schedules(self.todo_schedules)
+        
         # 左侧：简化显示
         general_widget = QWidget()
         general_lay = QVBoxLayout(general_widget)
@@ -823,45 +928,71 @@ class ScheduleWindow(QMainWindow):
         
         # 右侧：待办日程列表
         self.schedule_list_layout.addWidget(QLabel("📋 待办日程"))
-        if not self.todo_schedules:
+        if not sorted_schedules:
             self.schedule_list_layout.addWidget(QLabel("暂无待办日程"))
         else:
-            for g in self.todo_schedules:
+            for g in sorted_schedules:
                 box = TodoScheduleBox(g, self)
                 self.schedule_list_layout.addWidget(box)
 
         # 添加待办日程
         add_layout = QVBoxLayout()
         
-        # 内容输入框
-        content_layout = QHBoxLayout()
-        self.todo_content = QLineEdit()
-        self.todo_content.setPlaceholderText("一句话新建待办日程（如：完成作业）")
-        add_todo_btn = QPushButton("➕ 添加")
-        add_todo_btn.setFixedWidth(80)
-        add_todo_btn.clicked.connect(self.add_todo_schedule)
-        add_todo_btn.setObjectName("blue")
-        content_layout.addWidget(self.todo_content)
-        content_layout.addWidget(add_todo_btn)
-        add_layout.addLayout(content_layout)
-        
-        self.schedule_list_layout.addLayout(add_layout)
-        self.todo_content.returnPressed.connect(self.add_todo_schedule)
+
 
     # ===================== 日程排序 =====================
     def sort_schedules(self, schedules):
         """
         对日程进行排序：
-        1. 首先按起始时间排序
-        2. 相同起始时间的，按添加时间排序
+        1. 首先按完成状态排序（未完成在前）
+        2. 然后按日期和时间排序（按时间升序，最新的日程按适当顺序排列）
+        3. 相同时间的，按添加时间排序
         """
+        from datetime import datetime
+        
         def get_sort_key(schedule):
-            # 提取起始时间
-            start_time = schedule.get("start_time", "")
-            # 如果没有起始时间，使用空字符串，这样会排在后面
-            time_key = start_time if start_time else "99:99"
+            # 1. 完成状态：未完成 = 0，已完成 = 1，这样未完成会排在前面
+            completed = schedule.get("completed", False)
+            completed_key = 0 if not completed else 1
             
-            # 提取创建时间，用于二次排序
+            # 2. 日期和时间排序
+            date_str = schedule.get("date", "")
+            time_str = schedule.get("time", "")
+            start_time = schedule.get("start_time", "")
+            
+            # 组合时间：优先使用 start_time，然后是 time
+            combined_time = start_time if start_time else time_str
+            
+            # 尝试解析日期和时间，生成可比较的数值
+            try:
+                if date_str:
+                    # 解析日期
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                    date_timestamp = date_obj.timestamp()
+                else:
+                    # 没有日期的，使用一个很大的值，排在后面
+                    date_timestamp = float('inf')
+                
+                # 解析时间
+                time_value = 0
+                if combined_time:
+                    try:
+                        # 处理 24:00 这种特殊情况
+                        if combined_time.startswith("24:"):
+                            time_value = 24 * 60  # 24小时 * 60分钟
+                        else:
+                            time_obj = datetime.strptime(combined_time, "%H:%M")
+                            time_value = time_obj.hour * 60 + time_obj.minute
+                    except ValueError:
+                        time_value = 0
+                
+                # 日期时间戳（秒） + 时间（分钟），组合成一个排序键
+                datetime_key = date_timestamp * 10000 + time_value
+            except (ValueError, TypeError):
+                # 解析失败时，使用最大的值，排在后面
+                datetime_key = float('inf')
+            
+            # 3. 提取创建时间，用于二次排序
             created_at = schedule.get("created_at", 0)
             if not created_at and "id" in schedule:
                 try:
@@ -876,7 +1007,8 @@ class ScheduleWindow(QMainWindow):
                 except (ValueError, IndexError):
                     created_at = 0
             
-            return (time_key, created_at)
+            # 返回排序键：(完成状态, 日期时间, 创建时间)
+            return (completed_key, datetime_key, created_at)
         
         return sorted(schedules, key=get_sort_key)
 
